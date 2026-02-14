@@ -6,3 +6,8 @@ psycopg2-binary
 jinja2
 python-dotenv
 python-multipart
+bcrypt
+pydantic
+pydantic[email]
+
+
