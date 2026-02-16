@@ -9,5 +9,7 @@ python-multipart
 bcrypt
 pydantic
 pydantic[email]
+python-jose[cryptography]
+
 
 
