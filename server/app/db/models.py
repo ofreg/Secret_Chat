@@ -19,3 +19,6 @@ class RefreshToken(Base):
     token: Mapped[str] = mapped_column(String, unique=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+    user_agent: Mapped[str] = mapped_column(String, nullable=True)
+    ip_address: Mapped[str] = mapped_column(String, nullable=True)
