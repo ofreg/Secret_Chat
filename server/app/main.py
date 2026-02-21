@@ -8,6 +8,7 @@ import os
 from fastapi.templating import Jinja2Templates
 from collections import defaultdict
 from time import time
+from app.routers import messages
 login_attempts = defaultdict(list)
 MAX_ATTEMPTS = 5
 WINDOW_SECONDS = 60
@@ -19,7 +20,7 @@ templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/t
 
 Base.metadata.create_all(bind=engine)
 app.include_router(auth.router)
-
+app.include_router(messages.router)
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})

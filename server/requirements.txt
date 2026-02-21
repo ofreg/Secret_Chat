@@ -10,6 +10,7 @@ bcrypt
 pydantic
 pydantic[email]
 python-jose[cryptography]
-
+uvicorn[standard]
+websockets
 
 
