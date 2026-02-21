@@ -14,6 +14,8 @@ from app.utils.jwt import (
     hash_refresh_token,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
+from app.dependencies.auth import get_current_user
+from fastapi import Depends
 
 # rate limit
 from app.core.rate_limit import login_attempts, MAX_ATTEMPTS, WINDOW_SECONDS
@@ -153,13 +155,13 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     finally:
         db.close()
 
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse("/profile", status_code=303)
 
     response.set_cookie(
         "access_token",
         access_token,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
@@ -168,7 +170,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         "refresh_token",
         refresh_token,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
@@ -257,13 +259,13 @@ def refresh_token_route(
 
     new_access_token = create_access_token({"sub": user.email})
 
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse("/profile", status_code=303)
 
     response.set_cookie(
         "access_token",
         new_access_token,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
@@ -272,7 +274,7 @@ def refresh_token_route(
         "refresh_token",
         new_refresh_token,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
@@ -304,3 +306,37 @@ def logout(refresh_token: str = Cookie(None)):
     response.delete_cookie("refresh_token")
 
     return response
+
+
+ 
+
+@router.get("/profile", response_class=HTMLResponse)
+def profile_page(
+    request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    return templates.TemplateResponse(
+        "profile.html",
+        {
+            "request": request,
+            "email": current_user.email,
+            "name": current_user.name or ""
+        }
+    )
+
+@router.post("/profile")
+def update_profile(
+    request: Request,
+    name: str = Form(...),
+    current_user: User = Depends(get_current_user)
+):
+    db: Session = SessionLocal()
+
+    try:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        user.name = name
+        db.commit()
+    finally:
+        db.close()
+
+    return RedirectResponse("/profile", status_code=303)

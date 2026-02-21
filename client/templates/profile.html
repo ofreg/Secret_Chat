@@ -1,0 +1,13 @@
+<h2>Профіль</h2>
+
+<p><strong>Email:</strong> {{ email }}</p>
+
+<form method="post">
+    <label>Ім'я:</label>
+    <input name="name" value="{{ name }}">
+    <button>Зберегти</button>
+</form>
+
+<form method="post" action="/logout">
+    <button>Вийти</button>
+</form>

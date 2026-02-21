@@ -11,6 +11,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True)
     password: Mapped[str] = mapped_column(String)
 
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
