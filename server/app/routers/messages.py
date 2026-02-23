@@ -2,163 +2,149 @@ from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect,
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, or_, and_
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
-from app.db.session import AsyncSessionLocal, SessionLocal
+from app.db.session import SessionLocal, AsyncSessionLocal
 from app.db.models import User, Chat, Message
 from app.dependencies.auth import get_current_user
 from app.utils.jwt import decode_access_token
+from app.utils.websocket_manager import ConnectionManager
 import os
 
 router = APIRouter()
-templates = Jinja2Templates(
-    directory=os.getenv("TEMPLATES_DIR", "/code/client/templates")
-)
-
-active_connections: dict[int, list[WebSocket]] = {}
-
+templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
+manager = ConnectionManager()
 
 # ---------------- PAGE ----------------
-
 @router.get("/messages", response_class=HTMLResponse)
 def messages_page(request: Request, current_user: User = Depends(get_current_user)):
-
     db: Session = SessionLocal()
-
     chats = db.query(Chat).filter(
-        or_(
-            Chat.user1_id == current_user.id,
-            Chat.user2_id == current_user.id
-        )
+        or_(Chat.user1_id == current_user.id, Chat.user2_id == current_user.id)
     ).all()
-
     db.close()
-
     return templates.TemplateResponse(
         "messages.html",
-        {
-            "request": request,
-            "chats": chats,
-            "current_user_id": current_user.id
-        }
+        {"request": request, "chats": chats, "current_user_id": current_user.id}
     )
 
-
 # ---------------- SEARCH USER ----------------
+@router.get("/messages/search")
+def search_users(query: str, current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    users = db.query(User).filter(User.email.ilike(f"%{query}%"), User.id != current_user.id).limit(10).all()
+    db.close()
+    return [{"id": u.id, "email": u.email} for u in users]
 
+# ---------------- START CHAT ----------------
+# ---------------- START CHAT ----------------
 @router.post("/messages/start")
-def start_chat(
+async def start_chat_json(
     email: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
-
     db: Session = SessionLocal()
-
     other_user = db.query(User).filter(User.email == email).first()
 
     if not other_user or other_user.id == current_user.id:
         db.close()
-        return RedirectResponse("/messages", status_code=303)
+        return {"status": "error", "message": "Не знайдено користувача"}
 
     u1, u2 = sorted([current_user.id, other_user.id])
-
-    chat = db.query(Chat).filter(
-        and_(Chat.user1_id == u1, Chat.user2_id == u2)
-    ).first()
+    chat = db.query(Chat).filter(and_(Chat.user1_id == u1, Chat.user2_id == u2)).first()
+    chat_created = False
 
     if not chat:
         chat = Chat(user1_id=u1, user2_id=u2)
         db.add(chat)
         db.commit()
         db.refresh(chat)
+        chat_created = True
+        other_user_id = other_user.id
+        await manager.notify_user(other_user_id, "new_chat")
 
     db.close()
 
-    return RedirectResponse(f"/messages?chat_id={chat.id}", status_code=303)
+    return {"status": "ok", "chat_id": chat.id, "new": chat_created}
 
-@router.get("/messages/search")
-def search_users(
-    query: str,
-    current_user: User = Depends(get_current_user)
-):
-    db: Session = SessionLocal()
 
-    users = db.query(User).filter(
-        User.email.ilike(f"%{query}%"),
-        User.id != current_user.id
-    ).limit(10).all()
+# ---------------- WEBSOCKET USER ----------------
+@router.websocket("/ws/user")
+async def websocket_user(websocket: WebSocket):
 
-    db.close()
+    await websocket.accept()   # ← ОБОВʼЯЗКОВО ПЕРШИМ
 
-    return [
-        {"id": user.id, "email": user.email}
-        for user in users
-    ]
-# ---------------- WEBSOCKET ----------------
-
-@router.websocket("/ws/{chat_id}")
-async def websocket_endpoint(websocket: WebSocket, chat_id: int):
+    print("COOKIES:", websocket.cookies)
 
     token = websocket.cookies.get("access_token")
     if not token:
-        await websocket.close()
+        await websocket.close(code=1008)
         return
 
     payload = decode_access_token(token)
     if not payload:
-        await websocket.close()
+        await websocket.close(code=1008)
         return
 
     email = payload.get("sub")
 
     async with AsyncSessionLocal() as db:
-
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
-
         if not user:
-            await websocket.close()
+            await websocket.close(code=1008)
+            return
+
+        manager.user_connections[user.id] = websocket
+
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            manager.disconnect_user(user.id)
+# ---------------- WEBSOCKET CHAT ----------------
+@router.websocket("/ws/{chat_id}")
+async def websocket_chat(websocket: WebSocket, chat_id: int):
+    token = websocket.cookies.get("access_token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    payload = decode_access_token(token)
+    if not payload:
+        await websocket.close(code=1008)
+        return
+
+    email = payload.get("sub")
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        if not user:
+            await websocket.close(code=1008)
             return
 
         result = await db.execute(select(Chat).where(Chat.id == chat_id))
         chat = result.scalar_one_or_none()
-
         if not chat or user.id not in [chat.user1_id, chat.user2_id]:
-            await websocket.close()
+            await websocket.close(code=1008)
             return
 
-        await websocket.accept()
+        await manager.connect_chat(chat_id, websocket)
 
-        # Підключення
-        if chat_id not in active_connections:
-            active_connections[chat_id] = []
-
-        active_connections[chat_id].append(websocket)
-
-        # 🔹 Надсилаємо історію
-        result = await db.execute(
-            select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at)
-        )
+        # історія
+        result = await db.execute(select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at))
         messages = result.scalars().all()
-
         for msg in messages:
             await websocket.send_text(f"{msg.sender_id}: {msg.content}")
 
         try:
             while True:
                 data = await websocket.receive_text()
-
-                msg = Message(
-                    chat_id=chat_id,
-                    sender_id=user.id,
-                    content=data
-                )
-
+                msg = Message(chat_id=chat_id, sender_id=user.id, content=data)
                 db.add(msg)
                 await db.commit()
-
-                for connection in active_connections[chat_id]:
-                    await connection.send_text(f"{user.id}: {data}")
-
+                await manager.broadcast_chat(chat_id, f"{user.id}: {data}")
+                # нотифікація іншому користувачу
+                other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
+                await manager.notify_user(other_user_id, f"new_message:{chat_id}")
         except WebSocketDisconnect:
-            active_connections[chat_id].remove(websocket)
+            manager.disconnect_chat(chat_id, websocket)
