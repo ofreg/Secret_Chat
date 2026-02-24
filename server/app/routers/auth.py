@@ -21,7 +21,7 @@ from fastapi import Depends
 from app.core.rate_limit import login_attempts, MAX_ATTEMPTS, WINDOW_SECONDS
 
 from time import time
-
+import random
 
 email_adapter = TypeAdapter(EmailStr)
 
@@ -68,7 +68,8 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
             )
 
         hashed_pw = hash_password(password)
-        user = User(email=valid_email, password=hashed_pw)
+        random_username = f"user{random.randint(10000000, 99999999)}"  # ← рандомне ім'я
+        user = User(email=valid_email, password=hashed_pw, username=random_username)
 
         db.add(user)
         db.commit()
@@ -320,21 +321,19 @@ def profile_page(
         {
             "request": request,
             "email": current_user.email,
-            "name": current_user.name or ""
+            "name": current_user.username  # ← передаємо username як name
         }
     )
-
 @router.post("/profile")
 def update_profile(
     request: Request,
-    name: str = Form(...),
+    name: str = Form(...),  # ← тут "name", як в шаблоні
     current_user: User = Depends(get_current_user)
 ):
     db: Session = SessionLocal()
-
     try:
         user = db.query(User).filter(User.id == current_user.id).first()
-        user.name = name
+        user.username = name  # ← зберігаємо в username
         db.commit()
     finally:
         db.close()

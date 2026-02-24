@@ -78,9 +78,9 @@ window.addEventListener("load", function () {
         if (data.status === "ok") {
             await loadChats();
 
-            if (data.new) {
-                alert("Створено новий чат!");
-            }
+            //if (data.new) {
+            //    alert("Створено новий чат!");
+            //}
 
             window.location.search = "?chat_id=" + data.chat_id;
         } else {
@@ -94,6 +94,8 @@ window.addEventListener("load", function () {
     const userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
 
      
+    const messageSound = new Audio("/static/sounds/new_message.mp3"); // можна замінити файл
+
     userSocket.onmessage = function (event) {
         if (event.data === "new_chat") {
             loadChats();
@@ -102,6 +104,7 @@ window.addEventListener("load", function () {
             const updatedChatId = event.data.split(":")[1];
             if (!window.location.search.includes("chat_id=" + updatedChatId)) {
                 markChatAsUpdated(updatedChatId);
+                messageSound.play(); // відтворення звуку замість alert
             }
         }
     };

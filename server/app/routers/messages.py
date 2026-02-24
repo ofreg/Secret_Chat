@@ -36,7 +36,6 @@ def search_users(query: str, current_user: User = Depends(get_current_user)):
     return [{"id": u.id, "email": u.email} for u in users]
 
 # ---------------- START CHAT ----------------
-# ---------------- START CHAT ----------------
 @router.post("/messages/start")
 async def start_chat_json(
     email: str = Form(...),
@@ -101,6 +100,7 @@ async def websocket_user(websocket: WebSocket):
                 await websocket.receive_text()
         except WebSocketDisconnect:
             manager.disconnect_user(user.id)
+
 # ---------------- WEBSOCKET CHAT ----------------
 @router.websocket("/ws/{chat_id}")
 async def websocket_chat(websocket: WebSocket, chat_id: int):
@@ -134,7 +134,8 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         result = await db.execute(select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at))
         messages = result.scalars().all()
         for msg in messages:
-            await websocket.send_text(f"{msg.sender_id}: {msg.content}")
+            sender_name = await get_username(msg.sender_id, db)
+            await websocket.send_text(f"{sender_name}: {msg.content}")
 
         try:
             while True:
@@ -142,9 +143,15 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 msg = Message(chat_id=chat_id, sender_id=user.id, content=data)
                 db.add(msg)
                 await db.commit()
-                await manager.broadcast_chat(chat_id, f"{user.id}: {data}")
+                await manager.broadcast_chat(chat_id, f"{user.username}: {data}")
                 # нотифікація іншому користувачу
                 other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
                 await manager.notify_user(other_user_id, f"new_message:{chat_id}")
         except WebSocketDisconnect:
             manager.disconnect_chat(chat_id, websocket)
+
+# ---------------- HELPER ----------------
+async def get_username(user_id: int, db: AsyncSessionLocal):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    return user.username if user else "Unknown"

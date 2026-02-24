@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import Integer, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy import UniqueConstraint
+import random
 class User(Base):
     __tablename__ = "users"
 
@@ -13,7 +14,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True)
     password: Mapped[str] = mapped_column(String)
 
-    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # ← замінив name
 
 
 
@@ -30,6 +31,8 @@ class RefreshToken(Base):
 
 
 
+
+
 class Chat(Base):
     __tablename__ = "chats"
 
@@ -37,6 +40,10 @@ class Chat(Base):
 
     user1_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     user2_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    # Додані відносини до таблиці користувачів
+    user1: Mapped["User"] = relationship("User", foreign_keys=[user1_id])
+    user2: Mapped["User"] = relationship("User", foreign_keys=[user2_id])
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow

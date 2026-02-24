@@ -34,11 +34,11 @@
         {% if chats %}
             <ul id="chatList">
             {% for chat in chats %}
-                <li>
-                    <a href="/messages?chat_id={{ chat.id }}">
-                        Чат {{ chat.id }}
-                    </a>
-                </li>
+            <li>
+                <a href="/messages?chat_id={{ chat.id }}">
+                    Чат {{ chat.id }}
+                </a>
+            </li>
             {% endfor %}
             </ul>
         {% else %}
