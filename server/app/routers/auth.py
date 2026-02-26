@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Request, Form, Cookie, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
@@ -22,7 +24,11 @@ from app.core.rate_limit import login_attempts, MAX_ATTEMPTS, WINDOW_SECONDS
 
 from time import time
 import random
-
+from fastapi import Form
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+from fastapi.templating import Jinja2Templates
+from fastapi import Request, Depends
 email_adapter = TypeAdapter(EmailStr)
 
 router = APIRouter()
@@ -41,7 +47,6 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(
 def register_page(request: Request):
     return templates.TemplateResponse("register.html", {"request": request})
 
-
 @router.post("/register")
 def register(request: Request, email: str = Form(...), password: str = Form(...)):
 
@@ -55,6 +60,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         )
 
     db: Session = SessionLocal()
+
     try:
         existing_user = db.query(User).filter(
             User.email == valid_email
@@ -68,17 +74,27 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
             )
 
         hashed_pw = hash_password(password)
-        random_username = f"user{random.randint(10000000, 99999999)}"  # ← рандомне ім'я
-        user = User(email=valid_email, password=hashed_pw, username=random_username)
+
+        temp_username = f"tmp_{uuid.uuid4().hex}"
+        # ⬇ створюємо без username
+        user = User(
+            email=valid_email,
+            password=hashed_pw,
+            username=temp_username
+        )
 
         db.add(user)
-        db.commit()
+        db.flush()  # ← БД присвоює id, але commit ще НЕ відбувся
+
+        # тепер id вже є
+        user.username = f"user{user.id}"
+
+        db.commit()  # один єдиний commit
 
     finally:
         db.close()
 
     return RedirectResponse("/login", status_code=303)
-
 
 # --------------------- ЛОГІН ---------------------
 
@@ -327,14 +343,35 @@ def profile_page(
 @router.post("/profile")
 def update_profile(
     request: Request,
-    name: str = Form(...),  # ← тут "name", як в шаблоні
+    name: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
     db: Session = SessionLocal()
+
     try:
+        # 🔎 перевіряємо чи зайняте ім'я
+        existing_user = (
+            db.query(User)
+            .filter(User.username == name)
+            .first()
+        )
+
+        if existing_user and existing_user.id != current_user.id:
+            return templates.TemplateResponse(
+                "profile.html",
+                {
+                    "request": request,
+                    "email": current_user.email,
+                    "name": current_user.username,
+                    "error": "Це ім'я вже зайняте"
+                }
+            )
+
+        # ✅ якщо не зайняте — оновлюємо
         user = db.query(User).filter(User.id == current_user.id).first()
-        user.username = name  # ← зберігаємо в username
+        user.username = name
         db.commit()
+
     finally:
         db.close()
 
