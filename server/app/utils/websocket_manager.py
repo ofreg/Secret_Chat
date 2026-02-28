@@ -20,8 +20,12 @@ class ConnectionManager:
         self.user_connections.pop(user_id, None)
 
     async def notify_user(self, user_id: int, message: str):
-        if user_id in self.user_connections:
-            await self.user_connections[user_id].send_text(message)
+        websocket = self.user_connections.get(user_id)
+        if websocket:
+            try:
+                await websocket.send_text(message)
+            except:
+                self.disconnect_user(user_id)
 
     # -------- CHAT SOCKET --------
 

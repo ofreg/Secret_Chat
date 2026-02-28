@@ -76,12 +76,7 @@ window.addEventListener("load", function () {
         const data = await response.json();
 
         if (data.status === "ok") {
-            await loadChats();
-
-            //if (data.new) {
-            //    alert("Створено новий чат!");
-            //}
-
+            await loadChats(); // підвантажуємо список чатів
             window.location.search = "?chat_id=" + data.chat_id;
         } else {
             alert(data.message);
@@ -90,21 +85,23 @@ window.addEventListener("load", function () {
 
     /* ----------- USER SOCKET ----------- */
 
-    // Не читаємо токен JS — сервер сам дістає cookie HttpOnly
     const userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
+    const messageSound = new Audio("/static/sounds/new_message.mp3"); 
 
-     
-    const messageSound = new Audio("/static/sounds/new_message.mp3"); // можна замінити файл
+    userSocket.onmessage = async function (event) {
+        console.log("USER SOCKET GOT:", event.data);
 
-    userSocket.onmessage = function (event) {
         if (event.data === "new_chat") {
-            loadChats();
+            console.log("TRIGGER loadChats()");
+            await loadChats(); // 🔥 підвантажуємо нові чати
         }
+
         if (event.data.startsWith("new_message:")) {
             const updatedChatId = event.data.split(":")[1];
+
             if (!window.location.search.includes("chat_id=" + updatedChatId)) {
                 markChatAsUpdated(updatedChatId);
-                messageSound.play(); // відтворення звуку замість alert
+                messageSound.play();
             }
         }
     };
@@ -116,7 +113,6 @@ window.addEventListener("load", function () {
     /* ----------- HELPERS ----------- */
 
     async function loadChats() {
-
         const response = await fetch("/messages");
         const html = await response.text();
 
@@ -132,9 +128,7 @@ window.addEventListener("load", function () {
     }
 
     function markChatAsUpdated(chatId) {
-
         const link = document.querySelector(`a[href="/messages?chat_id=${chatId}"]`);
-
         if (link) {
             link.style.fontWeight = "bold";
         }

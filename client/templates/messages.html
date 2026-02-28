@@ -31,18 +31,20 @@
     <div class="sidebar">
         <h3>Ваші чати</h3>
 
-        {% if chats %}
-            <ul id="chatList">
-            {% for chat in chats %}
-            <li>
-                <a href="/messages?chat_id={{ chat.id }}">
-                    Чат {{ chat.id }}
-                </a>
-            </li>
-            {% endfor %}
-            </ul>
-        {% else %}
-            <p>Чатів поки немає</p>
+        <ul id="chatList">
+            {% if chats %}
+                {% for chat in chats %}
+                <li>
+                    <a href="/messages?chat_id={{ chat.id }}">
+                        Чат {{ chat.id }}
+                    </a>
+                </li>
+                {% endfor %}
+            {% endif %}
+        </ul>
+
+        {% if not chats %}
+            <p id="noChatsText">Чатів поки немає</p>
         {% endif %}
 
         <hr>

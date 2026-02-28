@@ -41,38 +41,40 @@ async def start_chat_json(
     email: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
-    db: Session = SessionLocal()
-    other_user = db.query(User).filter(User.email == email).first()
+    async with AsyncSessionLocal() as db:
 
-    if not other_user or other_user.id == current_user.id:
-        db.close()
-        return {"status": "error", "message": "Не знайдено користувача"}
+        result = await db.execute(select(User).where(User.email == email))
+        other_user = result.scalar_one_or_none()
 
-    u1, u2 = sorted([current_user.id, other_user.id])
-    chat = db.query(Chat).filter(and_(Chat.user1_id == u1, Chat.user2_id == u2)).first()
-    chat_created = False
+        if not other_user or other_user.id == current_user.id:
+            return {"status": "error", "message": "Не знайдено користувача"}
 
-    if not chat:
-        chat = Chat(user1_id=u1, user2_id=u2)
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
-        chat_created = True
-        other_user_id = other_user.id
-        await manager.notify_user(other_user_id, "new_chat")
+        u1, u2 = sorted([current_user.id, other_user.id])
 
-    db.close()
+        result = await db.execute(
+            select(Chat).where(and_(Chat.user1_id == u1, Chat.user2_id == u2))
+        )
+        chat = result.scalar_one_or_none()
 
-    return {"status": "ok", "chat_id": chat.id, "new": chat_created}
+        chat_created = False
+
+        if not chat:
+            chat = Chat(user1_id=u1, user2_id=u2)
+            db.add(chat)
+            await db.commit()
+            await db.refresh(chat)
+            chat_created = True
+
+        # 🔥 Ось тут правильно відправляємо new_chat
+        if chat_created:
+            await manager.notify_user(other_user.id, "new_chat")
+
+        return {"status": "ok", "chat_id": chat.id, "new": chat_created}
 
 
 # ---------------- WEBSOCKET USER ----------------
 @router.websocket("/ws/user")
 async def websocket_user(websocket: WebSocket):
-
-    await websocket.accept()   # ← ОБОВʼЯЗКОВО ПЕРШИМ
-
-    print("COOKIES:", websocket.cookies)
 
     token = websocket.cookies.get("access_token")
     if not token:
@@ -93,7 +95,8 @@ async def websocket_user(websocket: WebSocket):
             await websocket.close(code=1008)
             return
 
-        manager.user_connections[user.id] = websocket
+        # ✅ Використовуємо manager правильно
+        await manager.connect_user(user.id, websocket)
 
         try:
             while True:
@@ -101,6 +104,7 @@ async def websocket_user(websocket: WebSocket):
         except WebSocketDisconnect:
             manager.disconnect_user(user.id)
 
+# ---------------- WEBSOCKET CHAT ----------------
 # ---------------- WEBSOCKET CHAT ----------------
 @router.websocket("/ws/{chat_id}")
 async def websocket_chat(websocket: WebSocket, chat_id: int):
@@ -140,16 +144,18 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         try:
             while True:
                 data = await websocket.receive_text()
+
+                # Створюємо повідомлення
                 msg = Message(chat_id=chat_id, sender_id=user.id, content=data)
                 db.add(msg)
                 await db.commit()
+
                 await manager.broadcast_chat(chat_id, f"{user.username}: {data}")
-                # нотифікація іншому користувачу
+
                 other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
                 await manager.notify_user(other_user_id, f"new_message:{chat_id}")
         except WebSocketDisconnect:
             manager.disconnect_chat(chat_id, websocket)
-
 # ---------------- HELPER ----------------
 async def get_username(user_id: int, db: AsyncSessionLocal):
     result = await db.execute(select(User).where(User.id == user_id))
