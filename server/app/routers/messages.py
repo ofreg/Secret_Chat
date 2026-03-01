@@ -56,22 +56,13 @@ async def start_chat_json(
         )
         chat = result.scalar_one_or_none()
 
-        chat_created = False
-
         if not chat:
             chat = Chat(user1_id=u1, user2_id=u2)
             db.add(chat)
             await db.commit()
             await db.refresh(chat)
-            chat_created = True
 
-        # 🔥 Ось тут правильно відправляємо new_chat
-        if chat_created:
-            await manager.notify_user(other_user.id, "new_chat")
-
-        return {"status": "ok", "chat_id": chat.id, "new": chat_created}
-
-
+        return {"status": "ok", "chat_id": chat.id}
 # ---------------- WEBSOCKET USER ----------------
 @router.websocket("/ws/user")
 async def websocket_user(websocket: WebSocket):
@@ -95,14 +86,13 @@ async def websocket_user(websocket: WebSocket):
             await websocket.close(code=1008)
             return
 
-        # ✅ Використовуємо manager правильно
         await manager.connect_user(user.id, websocket)
 
         try:
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
-            manager.disconnect_user(user.id)
+            manager.disconnect_user(user.id, websocket)
 
 # ---------------- WEBSOCKET CHAT ----------------
 # ---------------- WEBSOCKET CHAT ----------------
@@ -145,7 +135,13 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
             while True:
                 data = await websocket.receive_text()
 
-                # Створюємо повідомлення
+                # 🔥 Перевіряємо перше повідомлення
+                result = await db.execute(
+                    select(Message.id).where(Message.chat_id == chat_id).limit(1)
+                )
+                first_existing = result.scalar_one_or_none()
+                is_first_message = first_existing is None
+
                 msg = Message(chat_id=chat_id, sender_id=user.id, content=data)
                 db.add(msg)
                 await db.commit()
@@ -153,6 +149,10 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 await manager.broadcast_chat(chat_id, f"{user.username}: {data}")
 
                 other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
+
+                if is_first_message:
+                    await manager.notify_user(other_user_id, "new_chat")
+
                 await manager.notify_user(other_user_id, f"new_message:{chat_id}")
         except WebSocketDisconnect:
             manager.disconnect_chat(chat_id, websocket)
