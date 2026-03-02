@@ -10,15 +10,30 @@ window.addEventListener("load", function () {
     if (chatId) {
         chatSocket = new WebSocket(`ws://${window.location.host}/ws/${chatId}`);
 
-        chatSocket.onmessage = function (event) {
-            const chat = document.getElementById("chat");
-            if (chat) {
-                chat.innerHTML += `<div>${event.data}</div>`;
-                chat.scrollTop = chat.scrollHeight;
-            }
-        };
+        chatSocket.onmessage = function(event) {
+
+    const data = event.data;
+
+    // 🔹 якщо це статус — оновлюємо кружок і ВИХОДИМО
+    if (data === "user_online") {
+        setUserStatus(true);
+        return;
     }
 
+    if (data === "user_offline") {
+        setUserStatus(false);
+        return;
+    }
+
+    // 🔹 якщо це звичайне повідомлення — додаємо в чат
+    const chat = document.getElementById("chat");
+    if (chat) {
+        chat.innerHTML += `<div>${data}</div>`;
+        chat.scrollTop = chat.scrollHeight;
+    }
+};
+    }
+    
     window.sendMessage = function () {
         const input = document.getElementById("messageInput");
         if (!input || !input.value || !chatSocket) return;
@@ -125,6 +140,14 @@ window.addEventListener("load", function () {
         if (newChatList && currentChatList) {
             currentChatList.innerHTML = newChatList.innerHTML;
         }
+
+        const noChatsText = document.getElementById("noChatsText");
+
+        if (currentChatList.children.length > 0) {
+            if (noChatsText) noChatsText.style.display = "none";
+        } else {
+            if (noChatsText) noChatsText.style.display = "block";
+        }
     }
 
     function markChatAsUpdated(chatId) {
@@ -135,3 +158,16 @@ window.addEventListener("load", function () {
     }
 
 });
+
+function setUserStatus(isOnline) {
+    const statusDot = document.getElementById("userStatus");
+    if (!statusDot) return;
+
+    if (isOnline) {
+        statusDot.classList.remove("offline");
+        statusDot.classList.add("online");
+    } else {
+        statusDot.classList.remove("online");
+        statusDot.classList.add("offline");
+    }
+}

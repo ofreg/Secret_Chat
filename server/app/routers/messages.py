@@ -7,12 +7,12 @@ from app.db.session import SessionLocal, AsyncSessionLocal
 from app.db.models import User, Chat, Message
 from app.dependencies.auth import get_current_user
 from app.utils.jwt import decode_access_token
-from app.utils.websocket_manager import ConnectionManager
+from app.utils.websocket_manager import manager
 import os
 
 router = APIRouter()
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
-manager = ConnectionManager()
+
 
 # ---------------- PAGE ----------------
 @router.get("/messages", response_class=HTMLResponse)
@@ -124,9 +124,23 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
 
         await manager.connect_chat(chat_id, websocket)
 
-        # історія
-        result = await db.execute(select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at))
+# Визначаємо співрозмовника
+        other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
+
+        # 🔥 НАДСИЛАЄМО СТАТУС ТІЛЬКИ ОДИН РАЗ
+        await websocket.send_text(
+            "user_online" if manager.is_online(other_user_id) else "user_offline"
+        )# 🔥 ОДРАЗУ НАДСИЛАЄМО ЙОГО СТАТУС
+        
+
+        # ---------------- ІСТОРІЯ ----------------
+        result = await db.execute(
+            select(Message)
+            .where(Message.chat_id == chat_id)
+            .order_by(Message.created_at)
+        )
         messages = result.scalars().all()
+
         for msg in messages:
             sender_name = await get_username(msg.sender_id, db)
             await websocket.send_text(f"{sender_name}: {msg.content}")
@@ -137,7 +151,9 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
 
                 # 🔥 Перевіряємо перше повідомлення
                 result = await db.execute(
-                    select(Message.id).where(Message.chat_id == chat_id).limit(1)
+                    select(Message.id)
+                    .where(Message.chat_id == chat_id)
+                    .limit(1)
                 )
                 first_existing = result.scalar_one_or_none()
                 is_first_message = first_existing is None
@@ -148,12 +164,11 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
 
                 await manager.broadcast_chat(chat_id, f"{user.username}: {data}")
 
-                other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
-
                 if is_first_message:
                     await manager.notify_user(other_user_id, "new_chat")
 
                 await manager.notify_user(other_user_id, f"new_message:{chat_id}")
+
         except WebSocketDisconnect:
             manager.disconnect_chat(chat_id, websocket)
 # ---------------- HELPER ----------------

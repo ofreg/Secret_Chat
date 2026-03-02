@@ -23,6 +23,21 @@
     overflow-y: auto;
     margin-bottom: 10px;
     padding: 5px;
+    }
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+}
+
+.online {
+    background: #2ecc71;
+}
+
+.offline {
+    background: #ccc;
 }
 </style>
 <script src="/static/js/messages.js"></script>
@@ -57,14 +72,19 @@
     <div class="chat-area">
 
         {% if request.query_params.get("chat_id") %}
-            <div class="messages" id="chat"></div>
+        <div class="chat-header">
+            <span class="status-dot offline" id="userStatus"></span>
+            <span id="chatUserName">Співрозмовник</span>
+        </div>
 
-            <div>
-                <input id="messageInput" placeholder="Повідомлення">
-                <button onclick="sendMessage()">Надіслати</button>
-            </div>
+        <div class="messages" id="chat"></div>
+
+        <div>
+            <input id="messageInput" placeholder="Повідомлення">
+            <button onclick="sendMessage()">Надіслати</button>
+        </div>
         {% else %}
-            <p>Оберіть чат або знайдіть користувача</p>
+        <p>Оберіть чат або знайдіть користувача</p>
         {% endif %}
 
     </div>
