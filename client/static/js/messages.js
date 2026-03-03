@@ -12,24 +12,20 @@ window.addEventListener("load", function () {
 
         chatSocket.onmessage = function(event) {
 
-    const data = event.data;
+    const data = JSON.parse(event.data);
 
-    // 🔹 якщо це статус — оновлюємо кружок і ВИХОДИМО
-    if (data === "user_online") {
-        setUserStatus(true);
+    if (data.type === "status") {
+        setUserStatus(data.is_online);
         return;
     }
 
-    if (data === "user_offline") {
-        setUserStatus(false);
+    if (data.type === "message") {
+        const chat = document.getElementById("chat");
+        if (chat) {
+            chat.innerHTML += `<div><b>${data.sender}:</b> ${data.content}</div>`;
+            chat.scrollTop = chat.scrollHeight;
+        }
         return;
-    }
-
-    // 🔹 якщо це звичайне повідомлення — додаємо в чат
-    const chat = document.getElementById("chat");
-    if (chat) {
-        chat.innerHTML += `<div>${data}</div>`;
-        chat.scrollTop = chat.scrollHeight;
     }
 };
     }
@@ -104,15 +100,15 @@ window.addEventListener("load", function () {
     const messageSound = new Audio("/static/sounds/new_message.mp3"); 
 
     userSocket.onmessage = async function (event) {
-        console.log("USER SOCKET GOT:", event.data);
 
-        if (event.data === "new_chat") {
-            console.log("TRIGGER loadChats()");
-            await loadChats(); // 🔥 підвантажуємо нові чати
+        const data = JSON.parse(event.data);
+
+        if (data.type === "new_chat") {
+            await loadChats();
         }
 
-        if (event.data.startsWith("new_message:")) {
-            const updatedChatId = event.data.split(":")[1];
+        if (data.type === "new_message") {
+            const updatedChatId = data.chat_id;
 
             if (!window.location.search.includes("chat_id=" + updatedChatId)) {
                 markChatAsUpdated(updatedChatId);

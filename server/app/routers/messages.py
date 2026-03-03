@@ -128,10 +128,14 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
 
         # 🔥 НАДСИЛАЄМО СТАТУС ТІЛЬКИ ОДИН РАЗ
-        await websocket.send_text(
-            "user_online" if manager.is_online(other_user_id) else "user_offline"
-        )# 🔥 ОДРАЗУ НАДСИЛАЄМО ЙОГО СТАТУС
-        
+        import json
+
+        await websocket.send_text(json.dumps({
+            "type": "status",
+            "user_id": other_user_id,
+            "is_online": manager.is_online(other_user_id)
+        }))# 🔥 ОДРАЗУ НАДСИЛАЄМО ЙОГО СТАТУС
+                
 
         # ---------------- ІСТОРІЯ ----------------
         result = await db.execute(
@@ -143,7 +147,11 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
 
         for msg in messages:
             sender_name = await get_username(msg.sender_id, db)
-            await websocket.send_text(f"{sender_name}: {msg.content}")
+            await websocket.send_text(json.dumps({
+            "type": "message",
+            "sender": sender_name,
+            "content": msg.content
+        }))
 
         try:
             while True:
@@ -162,13 +170,22 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 db.add(msg)
                 await db.commit()
 
-                await manager.broadcast_chat(chat_id, f"{user.username}: {data}")
+                await manager.broadcast_chat(chat_id, {
+                "type": "message",
+                "sender": user.username,
+                "content": data
+                })
+
 
                 if is_first_message:
-                    await manager.notify_user(other_user_id, "new_chat")
+                    await manager.notify_user(other_user_id, {
+                    "type": "new_chat"
+                })
 
-                await manager.notify_user(other_user_id, f"new_message:{chat_id}")
-
+                await manager.notify_user(other_user_id, {
+                "type": "new_message",
+                "chat_id": chat_id
+            })
         except WebSocketDisconnect:
             manager.disconnect_chat(chat_id, websocket)
 # ---------------- HELPER ----------------

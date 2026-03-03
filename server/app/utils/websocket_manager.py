@@ -1,7 +1,7 @@
 from fastapi import WebSocket
 from typing import Dict, List
 import asyncio
-
+import json
 
 class ConnectionManager:
     def __init__(self):
@@ -46,10 +46,10 @@ class ConnectionManager:
     def is_online(self, user_id: int) -> bool:
         return user_id in self.online_users
 
-    async def notify_user(self, user_id: int, message: str):
+    async def notify_user(self, user_id: int, data: dict):
         for websocket in list(self.user_connections.get(user_id, [])):
             try:
-                await websocket.send_text(message)
+                await websocket.send_text(json.dumps(data))
             except:
                 self.disconnect_user(user_id, websocket)
 
@@ -71,10 +71,10 @@ class ConnectionManager:
             if not self.chat_connections[chat_id]:
                 self.chat_connections.pop(chat_id)
 
-    async def broadcast_chat(self, chat_id: int, message: str):
+    async def broadcast_chat(self, chat_id: int, data: dict):
         for connection in list(self.chat_connections.get(chat_id, [])):
             try:
-                await connection.send_text(message)
+                await connection.send_text(json.dumps(data))
             except:
                 self.disconnect_chat(chat_id, connection)
 
@@ -82,18 +82,22 @@ class ConnectionManager:
 
     async def broadcast_user_status(self, user_id: int, is_online: bool):
 
-        status_message = "user_online" if is_online else "user_offline"
+        data = {
+            "type": "status",
+            "user_id": user_id,
+            "is_online": is_online
+        }
 
-        # 1️⃣ Оновлюємо user websocket (меню)
+        # меню
         for uid in list(self.user_connections.keys()):
             if uid != user_id:
-                await self.notify_user(uid, status_message)
+                await self.notify_user(uid, data)
 
-        # 2️⃣ Оновлюємо відкриті чати
+        # відкриті чати
         for chat_id, sockets in self.chat_connections.items():
             for ws in list(sockets):
                 try:
-                    await ws.send_text(status_message)
+                    await ws.send_text(json.dumps(data))
                 except:
                     self.disconnect_chat(chat_id, ws)
 
