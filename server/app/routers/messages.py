@@ -18,15 +18,41 @@ templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/t
 @router.get("/messages", response_class=HTMLResponse)
 def messages_page(request: Request, current_user: User = Depends(get_current_user)):
     db: Session = SessionLocal()
+
+    # 1️⃣ Вибираємо всі чати користувача
     chats = db.query(Chat).filter(
         or_(Chat.user1_id == current_user.id, Chat.user2_id == current_user.id)
     ).all()
+
+    # 2️⃣ Дістаємо chat_id з query params (якщо є)
+    chat_id = request.query_params.get("chat_id")
+    other_public_key = None
+    other_identity_key = None
+
+    if chat_id:
+        chat = db.query(Chat).filter(Chat.id == int(chat_id)).first()
+        if chat:
+            # визначаємо співрозмовника
+            other_user_id = chat.user2_id if chat.user1_id == current_user.id else chat.user1_id
+            other_user = db.query(User).filter(User.id == other_user_id).first()
+            if other_user:
+                other_public_key = other_user.public_key
+                other_identity_key = other_user.identity_key
+
     db.close()
+
+    # 3️⃣ Відправляємо шаблон із ключами співрозмовника
     return templates.TemplateResponse(
         "messages.html",
-        {"request": request, "chats": chats, "current_user_id": current_user.id}
+        {
+            "request": request,
+            "chats": chats,
+            "current_user_id": current_user.id,
+            "other_public_key": other_public_key,
+            "other_identity_key": other_identity_key,
+            "chat_id": chat_id
+        }
     )
-
 # ---------------- SEARCH USER ----------------
 @router.get("/messages/search")
 def search_users(query: str, current_user: User = Depends(get_current_user)):
@@ -62,7 +88,13 @@ async def start_chat_json(
             await db.commit()
             await db.refresh(chat)
 
-        return {"status": "ok", "chat_id": chat.id}
+        return {
+        "status": "ok",
+        "chat_id": chat.id,
+        "public_key": other_user.public_key,
+        "identity_key": other_user.identity_key,
+        "username": other_user.username
+    }
 # ---------------- WEBSOCKET USER ----------------
 @router.websocket("/ws/user")
 async def websocket_user(websocket: WebSocket):
@@ -193,3 +225,33 @@ async def get_username(user_id: int, db: AsyncSessionLocal):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     return user.username if user else "Unknown"
+
+
+
+@router.get("/messages/get_keys")
+async def get_keys(chat_id: int, current_user: User = Depends(get_current_user)):
+    async with AsyncSessionLocal() as db:
+        # Дістаємо чат
+        result = await db.execute(select(Chat).where(Chat.id == chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat or current_user.id not in [chat.user1_id, chat.user2_id]:
+            return {"status": "error", "message": "Чат не знайдено або ви не учасник"}
+
+        # Визначаємо співрозмовника
+        other_user_id = chat.user2_id if current_user.id == chat.user1_id else chat.user1_id
+        result = await db.execute(select(User).where(User.id == other_user_id))
+        other_user = result.scalar_one_or_none()
+
+        if not other_user:
+            return {"status": "error", "message": "Співрозмовник не знайдений"}
+
+        # 🔹 Повертаємо пусті ключі, якщо їх ще немає
+        public_key = other_user.public_key or ""
+        identity_key = other_user.identity_key or ""
+
+        return {
+            "status": "ok",
+            "public_key": public_key,
+            "identity_key": identity_key,
+            "username": other_user.username
+        }

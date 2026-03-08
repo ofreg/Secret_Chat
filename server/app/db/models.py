@@ -15,7 +15,8 @@ class User(Base):
     password: Mapped[str] = mapped_column(String)
 
     username: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # ← замінив name
-
+    public_key: Mapped[str] = mapped_column(Text, nullable=True)
+    identity_key: Mapped[str] = mapped_column(Text, nullable=True)
 
 
 class RefreshToken(Base):

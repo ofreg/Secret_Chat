@@ -1,8 +1,18 @@
+
 <h2>Профіль</h2>
 
 <p><strong>Email:</strong> {{ email }}</p>
 {% if error %}
     <p style="color:red;">{{ error }}</p>
+{% endif %}
+{% if init_keys %}
+<script type="module">
+import { initKeysIfNeeded } from "/static/js/crypto.js";
+
+window.addEventListener("load", async () => {
+    await initKeysIfNeeded();
+});
+</script>
 {% endif %}
 <form method="post">
     <label>Ім'я:</label>

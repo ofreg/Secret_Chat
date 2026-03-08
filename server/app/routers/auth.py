@@ -29,6 +29,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from fastapi.templating import Jinja2Templates
 from fastapi import Request, Depends
+from pydantic import BaseModel
 email_adapter = TypeAdapter(EmailStr)
 
 router = APIRouter()
@@ -39,7 +40,8 @@ templates = Jinja2Templates(
 REFRESH_TOKEN_EXPIRE_DAYS = int(
     os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7)
 )
-
+class PublicKeySchema(BaseModel):
+    public_key: str
 
 # --------------------- РЕЄСТРАЦІЯ ---------------------
 
@@ -337,7 +339,8 @@ def profile_page(
         {
             "request": request,
             "email": current_user.email,
-            "name": current_user.username  # ← передаємо username як name
+            "name": current_user.username,
+            "init_keys": True  # ← JS буде перевіряти цей прапорець
         }
     )
 @router.post("/profile")
@@ -376,3 +379,20 @@ def update_profile(
         db.close()
 
     return RedirectResponse("/profile", status_code=303)
+
+
+
+@router.post("/users/keys")
+def upload_keys(data: PublicKeySchema, current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            return {"status": "error", "message": "Користувач не знайдений"}
+
+        user.public_key = data.public_key
+        db.commit()
+    finally:
+        db.close()
+
+    return {"status": "ok"}

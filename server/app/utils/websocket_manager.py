@@ -3,6 +3,7 @@ from typing import Dict, List
 import asyncio
 import json
 
+
 class ConnectionManager:
     def __init__(self):
         # chat_id -> список websocket (відкриті чати)
@@ -13,6 +14,15 @@ class ConnectionManager:
 
         # онлайн користувачі
         self.online_users: set[int] = set()
+
+    # -------- SAFE SEND (🔥 порада №2) --------
+
+    async def safe_send(self, websocket: WebSocket, data: dict):
+        try:
+            await websocket.send_text(json.dumps(data))
+            return True
+        except:
+            return False
 
     # -------- USER SOCKET --------
 
@@ -48,9 +58,8 @@ class ConnectionManager:
 
     async def notify_user(self, user_id: int, data: dict):
         for websocket in list(self.user_connections.get(user_id, [])):
-            try:
-                await websocket.send_text(json.dumps(data))
-            except:
+            ok = await self.safe_send(websocket, data)
+            if not ok:
                 self.disconnect_user(user_id, websocket)
 
     # -------- CHAT SOCKET --------
@@ -73,9 +82,8 @@ class ConnectionManager:
 
     async def broadcast_chat(self, chat_id: int, data: dict):
         for connection in list(self.chat_connections.get(chat_id, [])):
-            try:
-                await connection.send_text(json.dumps(data))
-            except:
+            ok = await self.safe_send(connection, data)
+            if not ok:
                 self.disconnect_chat(chat_id, connection)
 
     # -------- STATUS BROADCAST --------
@@ -88,18 +96,27 @@ class ConnectionManager:
             "is_online": is_online
         }
 
+        tasks = []
+
         # меню
         for uid in list(self.user_connections.keys()):
             if uid != user_id:
-                await self.notify_user(uid, data)
+                tasks.append(self.notify_user(uid, data))
 
         # відкриті чати
-        for chat_id, sockets in self.chat_connections.items():
+        for chat_id, sockets in list(self.chat_connections.items()):
             for ws in list(sockets):
-                try:
-                    await ws.send_text(json.dumps(data))
-                except:
-                    self.disconnect_chat(chat_id, ws)
+
+                async def send(ws=ws, chat_id=chat_id):
+                    ok = await self.safe_send(ws, data)
+                    if not ok:
+                        self.disconnect_chat(chat_id, ws)
+
+                tasks.append(send())
+
+        # 🔥 порада №1 — не блокуємо event loop
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # 🔥 ГОЛОВНЕ — один глобальний manager

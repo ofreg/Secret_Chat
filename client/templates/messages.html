@@ -39,8 +39,21 @@
 .offline {
     background: #ccc;
 }
+
 </style>
-<script src="/static/js/messages.js"></script>
+
+
+{% if other_public_key %}
+<script>
+window.otherPublicKey = "{{ other_public_key }}";
+window.otherIdentityKey = "{{ other_identity_key }}";
+</script>
+{% endif %}
+<script type="module" src="/static/js/messages.js"></script>
+<div>
+    Fingerprint:
+    <span id="fingerprint"></span>
+</div>
 <div class="container">
 
     <div class="sidebar">
