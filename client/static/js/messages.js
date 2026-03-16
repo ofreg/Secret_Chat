@@ -1,5 +1,6 @@
 import { getPrivateKeyUint8, fingerprint, initKeysIfNeeded, nacl, naclUtil } from "./crypto.js";
-
+let keysReady = false;
+let pendingMessages = [];
 window.addEventListener("load", async function () {
     // 🔹 Якщо на /messages з chat_id
     const params = new URLSearchParams(window.location.search);
@@ -14,6 +15,8 @@ window.addEventListener("load", async function () {
         if (data.status === "ok" && data.public_key) {
             window.otherPublicKey = data.public_key;
             window.otherIdentityKey = data.identity_key;
+
+            keysReady = true; // 🔥 ключі готові
 
             // 🔹 Fingerprint для UI
             const fp = await fingerprint(window.otherIdentityKey);
@@ -113,25 +116,33 @@ async function openChatSocket(chatId) {
     const chatSocket = new WebSocket(`ws://${window.location.host}/ws/${chatId}`);
 
     chatSocket.onopen = async function () {
-        const myPrivateUint8 = await getPrivateKeyUint8();
-        if (!myPrivateUint8) {
-            console.error("Не вдалося отримати приватний ключ");
-            return;
-        }
 
-        if (!window.otherPublicKey) {
-            console.error("Немає public key співрозмовника!");
-            return;
-        }
+        const myPrivateUint8 = await getPrivateKeyUint8();
+        if (!myPrivateUint8) return;
+
+        if (!window.otherPublicKey) return;
 
         try {
             const cleanKey = window.otherPublicKey.replace(/\s+/g, '');
             const otherKeyUint8 = naclUtil.decodeBase64(cleanKey);
-            window.sharedSecret = nacl.box.before(otherKeyUint8, myPrivateUint8);
-            console.log("Shared secret успішно створено");
+
+            // 🔥 Створюємо shared secret
+            window.sharedSecret = nacl.box.before(
+                otherKeyUint8,
+                myPrivateUint8
+            );
+
+            console.log("Shared secret ready");
+
+            // 🔥 ТІЛЬКИ ТУТ ключі вважаються готовими
+            keysReady = true;
+
+            // 🔄 Обробляємо чергу
+            pendingMessages.forEach(processMessage);
+            pendingMessages = [];
+
         } catch (err) {
-            console.error("Невірне кодування public key:", window.otherPublicKey, err);
-            return;
+            console.error("Error creating shared secret:", err);
         }
     };
 
@@ -144,27 +155,50 @@ async function openChatSocket(chatId) {
         }
 
         if (data.type === "message") {
-            const chat = document.getElementById("chat");
-            if (!chat) return;
 
-            try {
-                const payload = JSON.parse(data.content);
-                const nonce = naclUtil.decodeBase64(payload.nonce);
-                const encrypted = naclUtil.decodeBase64(payload.message);
-                const decrypted = nacl.box.open.after(encrypted, nonce, window.sharedSecret);
-                if (!decrypted) return;
-                const text = naclUtil.encodeUTF8(decrypted);
-
-                chat.innerHTML += `<div><b>${data.sender}:</b> ${text}</div>`;
-                chat.scrollTop = chat.scrollHeight;
-            } catch {
-                chat.innerHTML += `<div><b>${data.sender}:</b> ${data.content}</div>`;
-                chat.scrollTop = chat.scrollHeight;
+            // 🔥 якщо ключів ще нема — в чергу
+            if (!keysReady || !window.sharedSecret) {
+                pendingMessages.push(data);
+                return;
             }
+
+            processMessage(data);
         }
     };
 
-    window.chatSocket = chatSocket; // зберігаємо для sendMessage
+    window.chatSocket = chatSocket;
+}
+
+async function processMessage(data) {
+
+    const chat = document.getElementById("chat");
+    if (!chat) return;
+
+    try {
+        const payload = JSON.parse(data.content);
+
+        const nonce = naclUtil.decodeBase64(payload.nonce);
+        const encrypted = naclUtil.decodeBase64(payload.message);
+
+        const decrypted = nacl.box.open.after(
+            encrypted,
+            nonce,
+            window.sharedSecret
+        );
+
+        if (!decrypted) return;
+
+        const text = naclUtil.encodeUTF8(decrypted);
+
+        chat.innerHTML += `<div><b>${data.sender}:</b> ${text}</div>`;
+        chat.scrollTop = chat.scrollHeight;
+
+    } catch {
+
+        chat.innerHTML += `<div><b>${data.sender}:</b> ${data.content}</div>`;
+        chat.scrollTop = chat.scrollHeight;
+
+    }
 }
     /* ----------- USER SOCKET ----------- */
 
@@ -244,11 +278,25 @@ function setUserStatus(isOnline) {
 
 /* ----------- EPHEMERAL FORWARD SECRECY ----------- */
 async function encryptMessage(message, otherPublicBase64) {
-    const otherPubUint8 = naclUtil.decodeBase64(otherPublicBase64);
+
+    const otherPubUint8 = naclUtil.decodeBase64(
+        otherPublicBase64.replace(/\s+/g, '')
+    );
+
     const ephemeral = nacl.box.keyPair();
-    const shared = nacl.box.before(otherPubUint8, ephemeral.secretKey);
+
+    const shared = nacl.box.before(
+        otherPubUint8,
+        ephemeral.secretKey
+    );
+
     const nonce = nacl.randomBytes(24);
-    const encrypted = nacl.box.after(naclUtil.decodeUTF8(message), nonce, shared);
+
+    const encrypted = nacl.box.after(
+        naclUtil.decodeUTF8(message),
+        nonce,
+        shared
+    );
 
     return {
         epk: naclUtil.encodeBase64(ephemeral.publicKey),
