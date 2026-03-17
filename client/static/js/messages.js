@@ -19,7 +19,7 @@ window.addEventListener("load", async function () {
             keysReady = true; // 🔥 ключі готові
 
             // 🔹 Fingerprint для UI
-            const fp = await fingerprint(window.otherIdentityKey);
+            const fp = await fingerprint(window.otherPublicKey);
             const el = document.getElementById("fingerprint");
             if (el) el.innerText = fp;
 
@@ -29,10 +29,23 @@ window.addEventListener("load", async function () {
     }
 
     window.sendMessage = function () {
-        const input = document.getElementById("messageInput");
-        if (!input || !input.value || !window.chatSocket || !window.sharedSecret) return;
+
+    const input = document.getElementById("messageInput");
+
+    if (
+        !input ||
+        !input.value ||
+        !window.chatSocket ||
+        !window.sharedSecret ||
+        !keysReady
+    ) {
+        return;
+    }
+
+    try {
 
         const nonce = nacl.randomBytes(24);
+
         const encrypted = nacl.box.after(
             naclUtil.decodeUTF8(input.value),
             nonce,
@@ -45,8 +58,13 @@ window.addEventListener("load", async function () {
         };
 
         window.chatSocket.send(JSON.stringify(payload));
+
         input.value = "";
-    };
+
+    } catch (err) {
+        console.error("Encryption error:", err);
+    }
+};
 
     /* ----------- SEARCH USERS ----------- */
     const searchInput = document.getElementById("searchInput");
@@ -70,33 +88,34 @@ window.addEventListener("load", async function () {
             }
 
             users.forEach(user => {
-                const div = document.createElement("div");
-                div.innerHTML = `
-                    ${user.email}
-                    <button onclick="startChat('${user.email}')">Написати</button>
-                `;
-                searchResults.appendChild(div);
-            });
+            const div = document.createElement("div");
+            div.innerHTML = `
+                ${user.username}
+                <button onclick="startChat('${user.username}')">Написати</button>
+            `;
+            searchResults.appendChild(div);
+        });
         });
     }
 
-    window.startChat = async function (email) {
-        const formData = new FormData();
-        formData.append("email", email);
+    window.startChat = async function (username) {
 
-        const response = await fetch("/messages/start", {
-            method: "POST",
-            body: formData
-        });
+    const formData = new FormData();
+    formData.append("username", username);
 
-        const data = await response.json();
+    const response = await fetch("/messages/start", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await response.json();
 
         if (data.status === "ok") {
             window.otherPublicKey = data.public_key;
             window.otherIdentityKey = data.identity_key;
 
             if (window.otherIdentityKey) {
-                const fp = await fingerprint(window.otherIdentityKey);
+                const fp = await fingerprint(window.otherPublicKey);
                 const el = document.getElementById("fingerprint");
                 if (el) el.innerText = fp;
             }
@@ -113,6 +132,18 @@ window.addEventListener("load", async function () {
 
 // 🔥 Відкладене відкриття WebSocket
 async function openChatSocket(chatId) {
+
+    // 🔥 СКИДАЄМО старий стан чату
+    keysReady = false;
+    window.sharedSecret = null;
+    pendingMessages = [];
+
+    if (window.chatSocket) {
+        try {
+            window.chatSocket.close();
+        } catch {}
+    }
+
     const chatSocket = new WebSocket(`ws://${window.location.host}/ws/${chatId}`);
 
     chatSocket.onopen = async function () {
@@ -123,21 +154,23 @@ async function openChatSocket(chatId) {
         if (!window.otherPublicKey) return;
 
         try {
+
             const cleanKey = window.otherPublicKey.replace(/\s+/g, '');
             const otherKeyUint8 = naclUtil.decodeBase64(cleanKey);
 
-            // 🔥 Створюємо shared secret
-            window.sharedSecret = nacl.box.before(
+            // 🔐 створюємо новий shared secret ТІЛЬКИ для цього чату
+            const newSharedSecret = nacl.box.before(
                 otherKeyUint8,
                 myPrivateUint8
             );
 
-            console.log("Shared secret ready");
+            window.sharedSecret = newSharedSecret;
 
-            // 🔥 ТІЛЬКИ ТУТ ключі вважаються готовими
+            console.log("Shared secret ready for chat:", chatId);
+
             keysReady = true;
 
-            // 🔄 Обробляємо чергу
+            // 🔄 обробляємо чергу
             pendingMessages.forEach(processMessage);
             pendingMessages = [];
 
@@ -147,6 +180,7 @@ async function openChatSocket(chatId) {
     };
 
     chatSocket.onmessage = async function(event) {
+
         const data = JSON.parse(event.data);
 
         if (data.type === "status") {
@@ -156,7 +190,6 @@ async function openChatSocket(chatId) {
 
         if (data.type === "message") {
 
-            // 🔥 якщо ключів ще нема — в чергу
             if (!keysReady || !window.sharedSecret) {
                 pendingMessages.push(data);
                 return;
@@ -174,7 +207,13 @@ async function processMessage(data) {
     const chat = document.getElementById("chat");
     if (!chat) return;
 
+    if (!window.sharedSecret) {
+        console.warn("Shared secret missing");
+        return;
+    }
+
     try {
+
         const payload = JSON.parse(data.content);
 
         const nonce = naclUtil.decodeBase64(payload.nonce);
@@ -186,7 +225,10 @@ async function processMessage(data) {
             window.sharedSecret
         );
 
-        if (!decrypted) return;
+        if (!decrypted) {
+            console.warn("Decryption failed");
+            return;
+        }
 
         const text = naclUtil.encodeUTF8(decrypted);
 

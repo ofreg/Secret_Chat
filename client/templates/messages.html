@@ -1,3 +1,9 @@
+{% extends "base.html" %}
+
+{% block title %}Повідомлення{% endblock %}
+
+{% block content %}
+
 <style>
 .container {
     display: flex;
@@ -23,7 +29,8 @@
     overflow-y: auto;
     margin-bottom: 10px;
     padding: 5px;
-    }
+}
+
 .status-dot {
     width: 10px;
     height: 10px;
@@ -32,16 +39,9 @@
     margin-right: 5px;
 }
 
-.online {
-    background: #2ecc71;
-}
-
-.offline {
-    background: #ccc;
-}
-
+.online { background: #2ecc71; }
+.offline { background: #ccc; }
 </style>
-
 
 {% if other_public_key %}
 <script>
@@ -49,26 +49,27 @@ window.otherPublicKey = "{{ other_public_key }}";
 window.otherIdentityKey = "{{ other_identity_key }}";
 </script>
 {% endif %}
+
 <script type="module" src="/static/js/messages.js"></script>
+
 <div>
     Fingerprint:
     <span id="fingerprint"></span>
 </div>
+
 <div class="container">
 
     <div class="sidebar">
         <h3>Ваші чати</h3>
 
         <ul id="chatList">
-            {% if chats %}
-                {% for chat in chats %}
-                <li>
-                    <a href="/messages?chat_id={{ chat.id }}">
-                        Чат {{ chat.id }}
-                    </a>
-                </li>
-                {% endfor %}
-            {% endif %}
+            {% for chat in chats %}
+            <li>
+                <a href="/messages?chat_id={{ chat.id }}">
+                    Чат {{ chat.id }}
+                </a>
+            </li>
+            {% endfor %}
         </ul>
 
         {% if not chats %}
@@ -78,13 +79,14 @@ window.otherIdentityKey = "{{ other_identity_key }}";
         <hr>
 
         <h4>Пошук користувача</h4>
-        <input id="searchInput" placeholder="Введіть email">
+        <input id="searchInput" placeholder="Введіть ім'я користувача">
         <div id="searchResults"></div>
     </div>
 
     <div class="chat-area">
 
         {% if request.query_params.get("chat_id") %}
+
         <div class="chat-header">
             <span class="status-dot offline" id="userStatus"></span>
             <span id="chatUserName">Співрозмовник</span>
@@ -96,10 +98,13 @@ window.otherIdentityKey = "{{ other_identity_key }}";
             <input id="messageInput" placeholder="Повідомлення">
             <button onclick="sendMessage()">Надіслати</button>
         </div>
+
         {% else %}
-        <p>Оберіть чат або знайдіть користувача</p>
+            <p>Оберіть чат або знайдіть користувача</p>
         {% endif %}
 
     </div>
 
 </div>
+
+{% endblock %}

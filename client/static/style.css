@@ -1,0 +1,26 @@
+.nav-form {
+    display: inline;
+}
+
+.nav-btn {
+    background: #2c3e50;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    margin-left: 5px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.nav-btn:hover {
+    background: #34495e;
+}
+
+.logout {
+    background: #e74c3c;
+}
+
+.logout:hover {
+    background: #c0392b;
+}

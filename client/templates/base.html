@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Chat{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="main-header">
+    <nav class="nav">
+
+        <a href="/" class="logo">💬 Chat</a>
+
+        <div class="nav-links">
+
+            <form method="get" action="/register" class="nav-form">
+                <button type="submit" class="nav-btn">Реєстрація</button>
+            </form>
+
+            <form method="get" action="/login" class="nav-form">
+                <button type="submit" class="nav-btn">Логін</button>
+            </form>
+
+            <form method="get" action="/messages" class="nav-form">
+                <button type="submit" class="nav-btn">Повідомлення</button>
+            </form>
+
+            <form method="get" action="/profile" class="nav-form">
+                <button type="submit" class="nav-btn">Профіль</button>
+            </form>
+
+            <form method="post" action="/logout" class="nav-form">
+                <button type="submit" class="nav-btn logout">Вихід</button>
+            </form>
+
+        </div>
+
+    </nav>
+</header>
+
+<main class="content">
+    {% block content %}{% endblock %}
+</main>
+
+</body>
+</html>

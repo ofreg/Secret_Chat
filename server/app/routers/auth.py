@@ -57,7 +57,11 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
     except ValidationError:
         return templates.TemplateResponse(
             "register.html",
-            {"request": request, "error": "Невірний формат email"},
+            {
+                "request": request,
+                "error": "Невірний формат email",
+                "email": email
+            },
             status_code=400
         )
 
@@ -71,7 +75,11 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         if existing_user:
             return templates.TemplateResponse(
                 "register.html",
-                {"request": request, "error": "Користувач вже існує"},
+                {
+                    "request": request,
+                    "error": "Користувач вже існує",
+                    "email": valid_email
+                },
                 status_code=400
             )
 

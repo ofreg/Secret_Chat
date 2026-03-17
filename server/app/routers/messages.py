@@ -9,7 +9,7 @@ from app.dependencies.auth import get_current_user
 from app.utils.jwt import decode_access_token
 from app.utils.websocket_manager import manager
 import os
-
+from sqlalchemy.ext.asyncio import AsyncSession
 router = APIRouter()
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
 
@@ -57,31 +57,50 @@ def messages_page(request: Request, current_user: User = Depends(get_current_use
 @router.get("/messages/search")
 def search_users(query: str, current_user: User = Depends(get_current_user)):
     db: Session = SessionLocal()
-    users = db.query(User).filter(User.email.ilike(f"%{query}%"), User.id != current_user.id).limit(10).all()
-    db.close()
-    return [{"id": u.id, "email": u.email} for u in users]
 
+    users = db.query(User).filter(
+        User.username.ilike(f"%{query}%"),
+        User.id != current_user.id
+    ).limit(10).all()
+
+    db.close()
+
+    return [
+        {
+            "id": u.id,
+            "username": u.username
+        }
+        for u in users
+    ]
 # ---------------- START CHAT ----------------
 @router.post("/messages/start")
 async def start_chat_json(
-    email: str = Form(...),
+    username: str = Form(...),   # 🔥 було email
     current_user: User = Depends(get_current_user)
 ):
     async with AsyncSessionLocal() as db:
 
-        result = await db.execute(select(User).where(User.email == email))
+        # 🔥 шукаємо користувача по username
+        result = await db.execute(
+            select(User).where(User.username == username)
+        )
         other_user = result.scalar_one_or_none()
 
         if not other_user or other_user.id == current_user.id:
             return {"status": "error", "message": "Не знайдено користувача"}
 
+        # 🔥 стабільний порядок id
         u1, u2 = sorted([current_user.id, other_user.id])
 
+        # перевіряємо чи чат вже існує
         result = await db.execute(
-            select(Chat).where(and_(Chat.user1_id == u1, Chat.user2_id == u2))
+            select(Chat).where(
+                and_(Chat.user1_id == u1, Chat.user2_id == u2)
+            )
         )
         chat = result.scalar_one_or_none()
 
+        # якщо чату немає — створюємо
         if not chat:
             chat = Chat(user1_id=u1, user2_id=u2)
             db.add(chat)
@@ -89,12 +108,12 @@ async def start_chat_json(
             await db.refresh(chat)
 
         return {
-        "status": "ok",
-        "chat_id": chat.id,
-        "public_key": other_user.public_key,
-        "identity_key": other_user.identity_key,
-        "username": other_user.username
-    }
+            "status": "ok",
+            "chat_id": chat.id,
+            "public_key": other_user.public_key,
+            "identity_key": other_user.identity_key,
+            "username": other_user.username
+        }
 # ---------------- WEBSOCKET USER ----------------
 @router.websocket("/ws/user")
 async def websocket_user(websocket: WebSocket):
@@ -221,7 +240,7 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         except WebSocketDisconnect:
             manager.disconnect_chat(chat_id, websocket)
 # ---------------- HELPER ----------------
-async def get_username(user_id: int, db: AsyncSessionLocal):
+async def get_username(user_id: int, db: AsyncSession):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     return user.username if user else "Unknown"

@@ -1,10 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Профіль{% endblock %}
+
+{% block content %}
 
 <h2>Профіль</h2>
 
 <p><strong>Email:</strong> {{ email }}</p>
+
 {% if error %}
     <p style="color:red;">{{ error }}</p>
 {% endif %}
+
 {% if init_keys %}
 <script type="module">
 import { initKeysIfNeeded } from "/static/js/crypto.js";
@@ -14,12 +21,17 @@ window.addEventListener("load", async () => {
 });
 </script>
 {% endif %}
+
 <form method="post">
     <label>Ім'я:</label>
     <input name="name" value="{{ name }}">
-    <button>Зберегти</button>
+    <button type="submit">Зберегти</button>
 </form>
 
+<br>
+
 <form method="post" action="/logout">
-    <button>Вийти</button>
+    <button type="submit">Вийти</button>
 </form>
+
+{% endblock %}

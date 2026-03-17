@@ -1,7 +1,22 @@
 <form method="post">
-  <input name="email" type="email" required>
-  <input name="password" type="password" required>
-  <button type="submit">Register</button>
+
+  <input 
+    name="email" 
+    type="email" 
+    required
+    value="{{ email or '' }}"
+    placeholder="Email"
+  >
+
+  <input 
+    name="password" 
+    type="password" 
+    required
+    placeholder="Пароль"
+  >
+
+  <button type="submit">Зареєструватися</button>
+
   {% if error %}
     <div class="error">{{ error }}</div>
   {% endif %}
