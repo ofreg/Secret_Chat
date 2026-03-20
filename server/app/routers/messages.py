@@ -274,3 +274,8 @@ async def get_keys(chat_id: int, current_user: User = Depends(get_current_user))
             "identity_key": identity_key,
             "username": other_user.username
         }
+    
+
+@router.get("/users/me")
+def users_me(current_user: User = Depends(get_current_user)):
+    return {"status": "ok", "username": current_user.username, "id": current_user.id}
