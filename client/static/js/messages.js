@@ -1,16 +1,16 @@
-import { getPrivateKeyUint8, fingerprint, initKeysIfNeeded, nacl, naclUtil } from "./crypto.js";
+import { getPrivateKeyUint8, getPublicKey, fingerprint, initKeysIfNeeded, nacl, naclUtil } from "./crypto.js";
 
 let keysReady = false;
 let pendingMessages = [];
 let myPrivateKeyCache = null;
-let myUsername = null; // для визначення своїх повідомлень
+let myPublicKeyCache = null;
+let myUsername = null;
 
 window.addEventListener("load", async function () {
-    // 🔹 Ініціалізація ключів
     await initKeysIfNeeded();
     myPrivateKeyCache = await getPrivateKeyUint8();
+    myPublicKeyCache = await getPublicKey();
 
-    // 🔹 Отримуємо username з серверу
     const meRes = await fetch("/users/me");
     const meData = await meRes.json();
     if (meData.status === "ok") {
@@ -30,41 +30,34 @@ window.addEventListener("load", async function () {
 
             keysReady = true;
 
-            // Fingerprint для UI
             const fp = await fingerprint(window.otherPublicKey);
             const el = document.getElementById("fingerprint");
             if (el) el.innerText = fp;
 
-            // WS після отримання ключів
             openChatSocket(chatId);
         }
     }
 
     window.sendMessage = async function () {
         const input = document.getElementById("messageInput");
-        if (!input || !input.value || !window.chatSocket || !window.otherPublicKey || !keysReady) return;
+        if (!input || !window.chatSocket || !window.otherPublicKey || !myPublicKeyCache || !keysReady) return;
 
         try {
-            const messageText = input.value;
+            const messageText = input.value.trim();
+            if (!messageText) return;
 
-            // 🔹 Відразу показуємо своє повідомлення
-            const chat = document.getElementById("chat");
-            const div = document.createElement("div");
-            div.innerHTML = `<b>You:</b> ${messageText}`;
-            chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
-
-            // 🔹 Шифруємо та відправляємо
-            const payload = await encryptMessage(messageText, window.otherPublicKey);
+            const payload = await encryptMessage(
+                messageText,
+                window.otherPublicKey,
+                myPublicKeyCache
+            );
             window.chatSocket.send(JSON.stringify(payload));
-
             input.value = "";
         } catch (err) {
             console.error("Encryption error:", err);
         }
     };
 
-    /* ----------- SEARCH USERS ----------- */
     const searchInput = document.getElementById("searchInput");
     const searchResults = document.getElementById("searchResults");
 
@@ -130,6 +123,11 @@ async function openChatSocket(chatId) {
     keysReady = false;
     pendingMessages = [];
 
+    const chat = document.getElementById("chat");
+    if (chat) {
+        chat.innerHTML = "";
+    }
+
     if (window.chatSocket) {
         try { window.chatSocket.close(); } catch {}
     }
@@ -169,14 +167,13 @@ async function processMessage(data) {
     if (!chat) return;
 
     try {
-        // 🔹 Пропускаємо свої повідомлення
-        if (data.sender === myUsername) return;
-
         let text;
         try {
             const payload = JSON.parse(data.content);
-            if (payload && payload.epk && payload.nonce && payload.message) {
-                text = await decryptMessage(payload, myPrivateKeyCache);
+            const encryptedPayload = selectPayloadForCurrentUser(payload, data.sender === myUsername);
+
+            if (encryptedPayload) {
+                text = await decryptMessage(encryptedPayload, myPrivateKeyCache);
             } else {
                 text = data.content;
             }
@@ -184,24 +181,24 @@ async function processMessage(data) {
             text = data.content;
         }
 
+        const senderLabel = data.sender === myUsername ? "You" : data.sender;
         const div = document.createElement("div");
-        div.innerHTML = `<b>${data.sender}:</b> ${text}`;
+        div.innerHTML = `<b>${senderLabel}:</b> ${text}`;
         chat.appendChild(div);
         chat.scrollTop = chat.scrollHeight;
 
     } catch (err) {
         console.warn("Decrypt error:", err);
+        const senderLabel = data.sender === myUsername ? "You" : data.sender;
         const div = document.createElement("div");
-        div.innerHTML = `<b>${data.sender}:</b> ${data.content}`;
+        div.innerHTML = `<b>${senderLabel}:</b> ${data.sender === myUsername ? "[Не вдалося розшифрувати власне повідомлення]" : data.content}`;
         chat.appendChild(div);
         chat.scrollTop = chat.scrollHeight;
     }
 }
 
-/* ----------- USER SOCKET ----------- */
-
 const userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
-const messageSound = new Audio("/static/sounds/new_message.mp3"); 
+const messageSound = new Audio("/static/sounds/new_message.mp3");
 
 userSocket.onmessage = async function (event) {
     const data = JSON.parse(event.data);
@@ -221,7 +218,6 @@ userSocket.onmessage = async function (event) {
 
 userSocket.onclose = function (event) { console.log("User WS closed", event); };
 
-/* ----------- HELPERS ----------- */
 async function loadChats() {
     const response = await fetch("/messages");
     const html = await response.text();
@@ -261,11 +257,18 @@ function setUserStatus(isOnline) {
     }
 }
 
-/* ----------- EPHEMERAL FORWARD SECRECY ----------- */
-async function encryptMessage(message, otherPublicBase64) {
-    const otherPubUint8 = naclUtil.decodeBase64(otherPublicBase64.replace(/\s+/g, ''));
+async function encryptMessage(message, recipientPublicBase64, senderPublicBase64) {
+    return {
+        version: 2,
+        recipient: encryptForPublicKey(message, recipientPublicBase64),
+        sender: encryptForPublicKey(message, senderPublicBase64)
+    };
+}
+
+function encryptForPublicKey(message, publicKeyBase64) {
+    const publicKeyUint8 = naclUtil.decodeBase64(publicKeyBase64.replace(/\s+/g, ""));
     const ephemeral = nacl.box.keyPair();
-    const shared = nacl.box.before(otherPubUint8, ephemeral.secretKey);
+    const shared = nacl.box.before(publicKeyUint8, ephemeral.secretKey);
     const nonce = nacl.randomBytes(24);
     const encrypted = nacl.box.after(naclUtil.decodeUTF8(message), nonce, shared);
 
@@ -274,6 +277,20 @@ async function encryptMessage(message, otherPublicBase64) {
         nonce: naclUtil.encodeBase64(nonce),
         message: naclUtil.encodeBase64(encrypted)
     };
+}
+
+function selectPayloadForCurrentUser(payload, isOwnMessage) {
+    if (!payload || typeof payload !== "object") return null;
+
+    if (payload.sender && payload.recipient) {
+        return isOwnMessage ? payload.sender : payload.recipient;
+    }
+
+    if (payload.epk && payload.nonce && payload.message) {
+        return payload;
+    }
+
+    return null;
 }
 
 async function decryptMessage(payload, myPrivateKeyUint8) {
