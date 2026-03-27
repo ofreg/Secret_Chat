@@ -47,7 +47,7 @@ class PublicKeySchema(BaseModel):
 
 @router.get("/register", response_class=HTMLResponse)
 def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
+    return templates.TemplateResponse(request, "register.html", {"request": request})
 
 @router.post("/register")
 def register(request: Request, email: str = Form(...), password: str = Form(...)):
@@ -56,6 +56,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         valid_email = str(email_adapter.validate_python(email))
     except ValidationError:
         return templates.TemplateResponse(
+            request,
             "register.html",
             {
                 "request": request,
@@ -74,6 +75,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
 
         if existing_user:
             return templates.TemplateResponse(
+                request,
                 "register.html",
                 {
                     "request": request,
@@ -110,7 +112,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(request, "login.html", {"request": request})
 
 
 @router.post("/login")
@@ -136,6 +138,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         valid_email = str(email_adapter.validate_python(email))
     except ValidationError:
         return templates.TemplateResponse(
+            request,
             "login.html",
             {"request": request, "error": "Невірний формат email"},
             status_code=400
@@ -150,6 +153,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
 
         if not user or not verify_password(password, user.password):
             return templates.TemplateResponse(
+                request,
                 "login.html",
                 {"request": request, "error": "Неправильний email або пароль"},
                 status_code=400
@@ -263,6 +267,7 @@ def refresh_token_route(
             )
 
         # 🔁 ROTATION
+        user_email = user.email
         db.delete(token_record)
 
         new_refresh_token = create_refresh_token()
@@ -284,7 +289,7 @@ def refresh_token_route(
     finally:
         db.close()
 
-    new_access_token = create_access_token({"sub": user.email})
+    new_access_token = create_access_token({"sub": user_email})
 
     response = RedirectResponse("/profile", status_code=303)
 
@@ -343,6 +348,7 @@ def profile_page(
     current_user: User = Depends(get_current_user)
 ):
     return templates.TemplateResponse(
+        request,
         "profile.html",
         {
             "request": request,
@@ -369,6 +375,7 @@ def update_profile(
 
         if existing_user and existing_user.id != current_user.id:
             return templates.TemplateResponse(
+                request,
                 "profile.html",
                 {
                     "request": request,

@@ -43,6 +43,7 @@ def messages_page(request: Request, current_user: User = Depends(get_current_use
 
     # 3️⃣ Відправляємо шаблон із ключами співрозмовника
     return templates.TemplateResponse(
+        request,
         "messages.html",
         {
             "request": request,

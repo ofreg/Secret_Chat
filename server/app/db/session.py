@@ -5,8 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
 
-
-DB_URL_SYNC = (
+DB_URL_SYNC = os.getenv("DATABASE_URL_SYNC") or (
     f"postgresql://{os.getenv('POSTGRES_USER')}:"
     f"{os.getenv('POSTGRES_PASSWORD')}@"
     f"{os.getenv('POSTGRES_HOST')}:"
@@ -14,7 +13,7 @@ DB_URL_SYNC = (
     f"{os.getenv('POSTGRES_DB')}"
 )
 
-DB_URL_ASYNC = DB_URL_SYNC.replace("postgresql://", "postgresql+asyncpg://")
+DB_URL_ASYNC = os.getenv("DATABASE_URL_ASYNC") or DB_URL_SYNC.replace("postgresql://", "postgresql+asyncpg://")
 
 
 # ✅ pool_pre_ping — перевіряє живість з'єднання
@@ -43,6 +42,9 @@ AsyncSessionLocal = async_sessionmaker(
 
 # 🔁 ЧЕКАЄМО ПОКИ БД СТАРТУЄ
 def wait_for_db(max_retries: int = 10, delay: int = 2):
+    if DB_URL_SYNC.startswith("sqlite"):
+        return
+
     for attempt in range(max_retries):
         try:
             with engine.connect():

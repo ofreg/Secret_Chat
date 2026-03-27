@@ -36,4 +36,4 @@ app.include_router(messages.router)
 # ---------------------- Корінь ----------------------
 @app.get("/")
 def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html", {"request": request})

@@ -12,5 +12,8 @@ pydantic[email]
 python-jose[cryptography]
 uvicorn[standard]
 websockets
+httpx
+pytest
+aiosqlite
 
 
