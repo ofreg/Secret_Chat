@@ -303,3 +303,5 @@ async function decryptMessage(payload, myPrivateKeyUint8) {
     if (!decrypted) throw new Error("Decryption failed");
     return naclUtil.encodeUTF8(decrypted);
 }
+
+
