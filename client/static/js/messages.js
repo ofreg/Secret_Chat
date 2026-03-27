@@ -1,4 +1,6 @@
-import { getPrivateKeyUint8, getPublicKey, fingerprint, initKeysIfNeeded, nacl, naclUtil } from "./crypto.js";
+import { getPrivateKeyUint8, getPublicKey, fingerprint, initKeysIfNeeded } from "./crypto.js";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js";
+import { initUserSearch } from "./userSearch.js";
 
 let keysReady = false;
 let pendingMessages = [];
@@ -21,21 +23,7 @@ window.addEventListener("load", async function () {
     const chatId = params.get("chat_id");
 
     if (chatId) {
-        const res = await fetch(`/messages/get_keys?chat_id=${chatId}`);
-        const data = await res.json();
-
-        if (data.status === "ok" && data.public_key) {
-            window.otherPublicKey = data.public_key;
-            window.otherIdentityKey = data.identity_key;
-
-            keysReady = true;
-
-            const fp = await fingerprint(window.otherPublicKey);
-            const el = document.getElementById("fingerprint");
-            if (el) el.innerText = fp;
-
-            openChatSocket(chatId);
-        }
+        await initializeChat(chatId);
     }
 
     window.sendMessage = async function () {
@@ -51,6 +39,7 @@ window.addEventListener("load", async function () {
                 window.otherPublicKey,
                 myPublicKeyCache
             );
+
             window.chatSocket.send(JSON.stringify(payload));
             input.value = "";
         } catch (err) {
@@ -58,66 +47,37 @@ window.addEventListener("load", async function () {
         }
     };
 
-    const searchInput = document.getElementById("searchInput");
-    const searchResults = document.getElementById("searchResults");
+    initUserSearch({
+        onChatStarted: async (chatData) => {
+            await applyChatKeys(chatData.public_key, chatData.identity_key);
+            openChatSocket(chatData.chat_id);
+            await loadChats();
+            window.location.search = "?chat_id=" + chatData.chat_id;
+        }
+    });
+});
 
-    if (searchInput) {
-        searchInput.addEventListener("input", async function () {
-            const query = searchInput.value;
-            if (query.length < 2) {
-                searchResults.innerHTML = "";
-                return;
-            }
+async function initializeChat(chatId) {
+    const res = await fetch(`/messages/get_keys?chat_id=${chatId}`);
+    const data = await res.json();
 
-            const response = await fetch(`/messages/search?query=${query}`);
-            const users = await response.json();
-
-            searchResults.innerHTML = "";
-            if (users.length === 0) {
-                searchResults.innerHTML = "<p>Нічого не знайдено</p>";
-                return;
-            }
-
-            users.forEach(user => {
-                const div = document.createElement("div");
-                div.innerHTML = `
-                    ${user.username}
-                    <button onclick="startChat('${user.username}')">Написати</button>
-                `;
-                searchResults.appendChild(div);
-            });
-        });
+    if (data.status !== "ok" || !data.public_key) {
+        return;
     }
 
-    window.startChat = async function (username) {
-        const formData = new FormData();
-        formData.append("username", username);
+    await applyChatKeys(data.public_key, data.identity_key);
+    openChatSocket(chatId);
+}
 
-        const response = await fetch("/messages/start", {
-            method: "POST",
-            body: formData
-        });
+async function applyChatKeys(publicKey, identityKey) {
+    window.otherPublicKey = publicKey;
+    window.otherIdentityKey = identityKey;
+    keysReady = true;
 
-        const data = await response.json();
-
-        if (data.status === "ok") {
-            window.otherPublicKey = data.public_key;
-            window.otherIdentityKey = data.identity_key;
-
-            if (window.otherIdentityKey) {
-                const fp = await fingerprint(window.otherPublicKey);
-                const el = document.getElementById("fingerprint");
-                if (el) el.innerText = fp;
-            }
-
-            openChatSocket(data.chat_id);
-            await loadChats();
-            window.location.search = "?chat_id=" + data.chat_id;
-        } else {
-            alert(data.message);
-        }
-    };
-});
+    const fp = await fingerprint(window.otherPublicKey);
+    const el = document.getElementById("fingerprint");
+    if (el) el.innerText = fp;
+}
 
 async function openChatSocket(chatId) {
     keysReady = false;
@@ -142,7 +102,7 @@ async function openChatSocket(chatId) {
         pendingMessages = [];
     };
 
-    chatSocket.onmessage = async function(event) {
+    chatSocket.onmessage = async function (event) {
         const data = JSON.parse(event.data);
 
         if (data.type === "status") {
@@ -155,6 +115,7 @@ async function openChatSocket(chatId) {
                 pendingMessages.push(data);
                 return;
             }
+
             processMessage(data);
         }
     };
@@ -168,6 +129,7 @@ async function processMessage(data) {
 
     try {
         let text;
+
         try {
             const payload = JSON.parse(data.content);
             const encryptedPayload = selectPayloadForCurrentUser(payload, data.sender === myUsername);
@@ -181,20 +143,26 @@ async function processMessage(data) {
             text = data.content;
         }
 
-        const senderLabel = data.sender === myUsername ? "You" : data.sender;
-        const div = document.createElement("div");
-        div.innerHTML = `<b>${senderLabel}:</b> ${text}`;
-        chat.appendChild(div);
-        chat.scrollTop = chat.scrollHeight;
-
+        renderMessage(chat, getSenderLabel(data.sender), text);
     } catch (err) {
         console.warn("Decrypt error:", err);
-        const senderLabel = data.sender === myUsername ? "You" : data.sender;
-        const div = document.createElement("div");
-        div.innerHTML = `<b>${senderLabel}:</b> ${data.sender === myUsername ? "[Не вдалося розшифрувати власне повідомлення]" : data.content}`;
-        chat.appendChild(div);
-        chat.scrollTop = chat.scrollHeight;
+        const fallbackText = data.sender === myUsername
+            ? "[Не вдалося розшифрувати власне повідомлення]"
+            : data.content;
+
+        renderMessage(chat, getSenderLabel(data.sender), fallbackText);
     }
+}
+
+function renderMessage(chat, senderLabel, text) {
+    const div = document.createElement("div");
+    div.innerHTML = `<b>${senderLabel}:</b> ${text}`;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+}
+
+function getSenderLabel(senderName) {
+    return senderName === myUsername ? "You" : senderName;
 }
 
 const userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
@@ -216,7 +184,9 @@ userSocket.onmessage = async function (event) {
     }
 };
 
-userSocket.onclose = function (event) { console.log("User WS closed", event); };
+userSocket.onclose = function (event) {
+    console.log("User WS closed", event);
+};
 
 async function loadChats() {
     const response = await fetch("/messages");
@@ -256,52 +226,3 @@ function setUserStatus(isOnline) {
         statusDot.classList.add("offline");
     }
 }
-
-async function encryptMessage(message, recipientPublicBase64, senderPublicBase64) {
-    return {
-        version: 2,
-        recipient: encryptForPublicKey(message, recipientPublicBase64),
-        sender: encryptForPublicKey(message, senderPublicBase64)
-    };
-}
-
-function encryptForPublicKey(message, publicKeyBase64) {
-    const publicKeyUint8 = naclUtil.decodeBase64(publicKeyBase64.replace(/\s+/g, ""));
-    const ephemeral = nacl.box.keyPair();
-    const shared = nacl.box.before(publicKeyUint8, ephemeral.secretKey);
-    const nonce = nacl.randomBytes(24);
-    const encrypted = nacl.box.after(naclUtil.decodeUTF8(message), nonce, shared);
-
-    return {
-        epk: naclUtil.encodeBase64(ephemeral.publicKey),
-        nonce: naclUtil.encodeBase64(nonce),
-        message: naclUtil.encodeBase64(encrypted)
-    };
-}
-
-function selectPayloadForCurrentUser(payload, isOwnMessage) {
-    if (!payload || typeof payload !== "object") return null;
-
-    if (payload.sender && payload.recipient) {
-        return isOwnMessage ? payload.sender : payload.recipient;
-    }
-
-    if (payload.epk && payload.nonce && payload.message) {
-        return payload;
-    }
-
-    return null;
-}
-
-async function decryptMessage(payload, myPrivateKeyUint8) {
-    if (!payload.epk) throw new Error("Missing epk");
-    const epk = naclUtil.decodeBase64(payload.epk);
-    const nonce = naclUtil.decodeBase64(payload.nonce);
-    const encrypted = naclUtil.decodeBase64(payload.message);
-    const shared = nacl.box.before(epk, myPrivateKeyUint8);
-    const decrypted = nacl.box.open.after(encrypted, nonce, shared);
-    if (!decrypted) throw new Error("Decryption failed");
-    return naclUtil.encodeUTF8(decrypted);
-}
-
-
