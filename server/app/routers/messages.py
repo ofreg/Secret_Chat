@@ -201,8 +201,14 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
             sender_name = await get_username(msg.sender_id, db)
             await websocket.send_text(json.dumps({
             "type": "message",
+            "message_id": msg.id,
             "sender": sender_name,
-            "content": msg.content
+            "content": msg.content,
+            "historical": True
+        }))
+
+        await websocket.send_text(json.dumps({
+            "type": "history_complete"
         }))
 
         try:
@@ -221,11 +227,14 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 msg = Message(chat_id=chat_id, sender_id=user.id, content=data)
                 db.add(msg)
                 await db.commit()
+                await db.refresh(msg)
 
                 await manager.broadcast_chat(chat_id, {
                 "type": "message",
+                "message_id": msg.id,
                 "sender": user.username,
-                "content": data
+                "content": data,
+                "historical": False
                 })
 
 

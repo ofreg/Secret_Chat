@@ -5,10 +5,16 @@ import { openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
 
 // ---------- Open DB ----------
 async function idbOpen() {
-    return openDB("e2ee_chat", 1, {
+    return openDB("e2ee_chat", 3, {
         upgrade(db) {
             if (!db.objectStoreNames.contains("keys")) {
                 db.createObjectStore("keys");
+            }
+            if (!db.objectStoreNames.contains("ratchets")) {
+                db.createObjectStore("ratchets");
+            }
+            if (!db.objectStoreNames.contains("messages")) {
+                db.createObjectStore("messages");
             }
         }
     });
@@ -46,6 +52,41 @@ export async function getPublicKey() {
     const data = await db.get("keys", "identity");
 
     return data?.publicKey || null;
+}
+
+export async function saveRatchetState(chatId, state) {
+    const db = await idbOpen();
+    await db.put("ratchets", state, String(chatId));
+}
+
+export async function getRatchetState(chatId) {
+    const db = await idbOpen();
+    return db.get("ratchets", String(chatId));
+}
+
+export async function deleteRatchetState(chatId) {
+    const db = await idbOpen();
+    await db.delete("ratchets", String(chatId));
+}
+
+export async function saveCachedMessageText(chatId, messageId, text) {
+    const db = await idbOpen();
+    await db.put("messages", text, `msg:${chatId}:${messageId}`);
+}
+
+export async function getCachedMessageText(chatId, messageId) {
+    const db = await idbOpen();
+    return db.get("messages", `msg:${chatId}:${messageId}`);
+}
+
+export async function saveLastSeenMessageId(chatId, messageId) {
+    const db = await idbOpen();
+    await db.put("messages", messageId, `meta:lastSeen:${chatId}`);
+}
+
+export async function getLastSeenMessageId(chatId) {
+    const db = await idbOpen();
+    return (await db.get("messages", `meta:lastSeen:${chatId}`)) || 0;
 }
 
 // ---------- Init ----------

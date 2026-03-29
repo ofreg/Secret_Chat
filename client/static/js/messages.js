@@ -1,4 +1,14 @@
-import { getPrivateKeyUint8, getPublicKey, fingerprint, initKeysIfNeeded } from "./crypto.js";
+import {
+    getCachedMessageText,
+    deleteRatchetState,
+    getLastSeenMessageId,
+    getPrivateKeyUint8,
+    getPublicKey,
+    fingerprint,
+    initKeysIfNeeded,
+    saveCachedMessageText,
+    saveLastSeenMessageId
+} from "./crypto.js";
 import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js";
 import { initUserSearch } from "./userSearch.js";
 
@@ -7,6 +17,12 @@ let pendingMessages = [];
 let myPrivateKeyCache = null;
 let myPublicKeyCache = null;
 let myUsername = null;
+let currentChatId = null;
+let messageProcessingChain = Promise.resolve();
+let renderedMessageIds = new Set();
+let historySyncInProgress = false;
+let deferredLiveMessages = [];
+let chatTranscript = [];
 
 window.addEventListener("load", async function () {
     await initKeysIfNeeded();
@@ -21,6 +37,7 @@ window.addEventListener("load", async function () {
 
     const params = new URLSearchParams(window.location.search);
     const chatId = params.get("chat_id");
+    currentChatId = chatId;
 
     if (chatId) {
         await initializeChat(chatId);
@@ -28,17 +45,21 @@ window.addEventListener("load", async function () {
 
     window.sendMessage = async function () {
         const input = document.getElementById("messageInput");
-        if (!input || !window.chatSocket || !window.otherPublicKey || !myPublicKeyCache || !keysReady) return;
+        if (!input || !window.chatSocket || !window.otherPublicKey || !myPublicKeyCache || !keysReady) {
+            return;
+        }
 
         try {
             const messageText = input.value.trim();
             if (!messageText) return;
 
-            const payload = await encryptMessage(
-                messageText,
-                window.otherPublicKey,
-                myPublicKeyCache
-            );
+            const payload = await encryptMessage({
+                chatId: getCurrentChatId(),
+                message: messageText,
+                recipientPublicBase64: window.otherPublicKey,
+                senderPublicBase64: myPublicKeyCache,
+                myPrivateKeyUint8: myPrivateKeyCache
+            });
 
             window.chatSocket.send(JSON.stringify(payload));
             input.value = "";
@@ -49,6 +70,7 @@ window.addEventListener("load", async function () {
 
     initUserSearch({
         onChatStarted: async (chatData) => {
+            currentChatId = String(chatData.chat_id);
             await applyChatKeys(chatData.public_key, chatData.identity_key);
             openChatSocket(chatData.chat_id);
             await loadChats();
@@ -58,6 +80,7 @@ window.addEventListener("load", async function () {
 });
 
 async function initializeChat(chatId) {
+    currentChatId = String(chatId);
     const res = await fetch(`/messages/get_keys?chat_id=${chatId}`);
     const data = await res.json();
 
@@ -80,8 +103,14 @@ async function applyChatKeys(publicKey, identityKey) {
 }
 
 async function openChatSocket(chatId) {
+    currentChatId = String(chatId);
     keysReady = false;
     pendingMessages = [];
+    messageProcessingChain = Promise.resolve();
+    renderedMessageIds = new Set();
+    historySyncInProgress = true;
+    deferredLiveMessages = [];
+    chatTranscript = [];
 
     const chat = document.getElementById("chat");
     if (chat) {
@@ -89,7 +118,9 @@ async function openChatSocket(chatId) {
     }
 
     if (window.chatSocket) {
-        try { window.chatSocket.close(); } catch {}
+        try {
+            window.chatSocket.close();
+        } catch {}
     }
 
     const chatSocket = new WebSocket(`ws://${window.location.host}/ws/${chatId}`);
@@ -98,7 +129,7 @@ async function openChatSocket(chatId) {
         console.log("Chat ready:", chatId);
         keysReady = true;
 
-        pendingMessages.forEach(processMessage);
+        pendingMessages.forEach(queueMessageProcessing);
         pendingMessages = [];
     };
 
@@ -110,13 +141,27 @@ async function openChatSocket(chatId) {
             return;
         }
 
+        if (data.type === "history_complete") {
+            historySyncInProgress = false;
+
+            const queuedLiveMessages = [...deferredLiveMessages];
+            deferredLiveMessages = [];
+            queuedLiveMessages.forEach(queueMessageProcessing);
+            return;
+        }
+
         if (data.type === "message") {
             if (!keysReady) {
                 pendingMessages.push(data);
                 return;
             }
 
-            processMessage(data);
+            if (historySyncInProgress && !data.historical) {
+                deferredLiveMessages.push(data);
+                return;
+            }
+
+            queueMessageProcessing(data);
         }
     };
 
@@ -127,28 +172,56 @@ async function processMessage(data) {
     const chat = document.getElementById("chat");
     if (!chat) return;
 
+    const chatId = getCurrentChatId();
+    const messageId = data.message_id || null;
+    const cachedText = messageId ? await getCachedMessageText(chatId, messageId) : null;
+    const lastSeenMessageId = await getLastSeenMessageId(chatId);
+    const isOwnMessage = data.sender === myUsername;
+    const payload = tryParsePayload(data.content);
+    const encryptedPayload = selectPayloadForCurrentUser(payload, isOwnMessage);
+    const isHistorical = Boolean(data.historical);
+
+    rememberTranscriptMessage(data);
+
+    if (messageId && renderedMessageIds.has(messageId)) {
+        return;
+    }
+
+    if (isHistorical && messageId && messageId <= lastSeenMessageId && cachedText) {
+        renderMessage(chat, getSenderLabel(data.sender), cachedText);
+        renderedMessageIds.add(messageId);
+        return;
+    }
+
     try {
         let text;
 
-        try {
-            const payload = JSON.parse(data.content);
-            const encryptedPayload = selectPayloadForCurrentUser(payload, data.sender === myUsername);
+        if (encryptedPayload && payload) {
+            text = await decryptWithRecovery({
+                data,
+                payload,
+                chatId,
+                isOwnMessage,
+                allowStateReset: !isHistorical
+            });
+        } else {
+            text = cachedText || data.content;
+        }
 
-            if (encryptedPayload) {
-                text = await decryptMessage(encryptedPayload, myPrivateKeyCache);
-            } else {
-                text = data.content;
-            }
-        } catch {
-            text = data.content;
+        if (messageId) {
+            await saveCachedMessageText(chatId, messageId, text);
+            await saveLastSeenMessageId(chatId, Math.max(lastSeenMessageId, messageId));
+            renderedMessageIds.add(messageId);
         }
 
         renderMessage(chat, getSenderLabel(data.sender), text);
     } catch (err) {
         console.warn("Decrypt error:", err);
-        const fallbackText = data.sender === myUsername
-            ? "[Не вдалося розшифрувати власне повідомлення]"
-            : data.content;
+        const fallbackText = cachedText || data.content;
+
+        if (messageId) {
+            renderedMessageIds.add(messageId);
+        }
 
         renderMessage(chat, getSenderLabel(data.sender), fallbackText);
     }
@@ -224,5 +297,104 @@ function setUserStatus(isOnline) {
     } else {
         statusDot.classList.remove("online");
         statusDot.classList.add("offline");
+    }
+}
+
+function getCurrentChatId() {
+    return currentChatId;
+}
+
+function queueMessageProcessing(data) {
+    messageProcessingChain = messageProcessingChain
+        .then(() => processMessage(data))
+        .catch((err) => {
+            console.warn("Message queue error:", err);
+        });
+}
+
+function rememberTranscriptMessage(data) {
+    const messageId = data.message_id || null;
+
+    if (messageId) {
+        const existingIndex = chatTranscript.findIndex((item) => item.message_id === messageId);
+        if (existingIndex !== -1) {
+            chatTranscript[existingIndex] = {
+                ...chatTranscript[existingIndex],
+                ...data
+            };
+            return;
+        }
+    }
+
+    chatTranscript.push({ ...data });
+    chatTranscript.sort((a, b) => (a.message_id || 0) - (b.message_id || 0));
+}
+
+async function decryptWithRecovery({ data, payload, chatId, isOwnMessage, allowStateReset }) {
+    try {
+        return await decryptMessage({
+            chatId,
+            payload,
+            myPrivateKeyUint8: myPrivateKeyCache,
+            myPublicKeyBase64: myPublicKeyCache,
+            otherPublicKeyBase64: window.otherPublicKey,
+            isOwnMessage,
+            allowStateReset
+        });
+    } catch (error) {
+        if (isOwnMessage || !data.message_id) {
+            throw error;
+        }
+
+        console.warn("Attempting ratchet recovery for message", data.message_id, error);
+        await rebuildRatchetStateFromTranscript(chatId, data.message_id);
+
+        return decryptMessage({
+            chatId,
+            payload,
+            myPrivateKeyUint8: myPrivateKeyCache,
+            myPublicKeyBase64: myPublicKeyCache,
+            otherPublicKeyBase64: window.otherPublicKey,
+            isOwnMessage,
+            allowStateReset: false
+        });
+    }
+}
+
+async function rebuildRatchetStateFromTranscript(chatId, upToMessageId) {
+    await deleteRatchetState(chatId);
+
+    for (const item of chatTranscript) {
+        if (!item.message_id || item.message_id >= upToMessageId) {
+            continue;
+        }
+
+        const payload = tryParsePayload(item.content);
+        const isOwnMessage = item.sender === myUsername;
+        if (!payload || !selectPayloadForCurrentUser(payload, isOwnMessage)) {
+            continue;
+        }
+
+        try {
+            await decryptMessage({
+                chatId,
+                payload,
+                myPrivateKeyUint8: myPrivateKeyCache,
+                myPublicKeyBase64: myPublicKeyCache,
+                otherPublicKeyBase64: window.otherPublicKey,
+                isOwnMessage,
+                allowStateReset: false
+            });
+        } catch (replayError) {
+            console.warn("Replay step failed", item.message_id, replayError);
+        }
+    }
+}
+
+function tryParsePayload(content) {
+    try {
+        return JSON.parse(content);
+    } catch {
+        return null;
     }
 }

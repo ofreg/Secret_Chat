@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Request, Form, Cookie, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from app.db.session import SessionLocal
 from app.db.models import User, RefreshToken
@@ -103,6 +104,18 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
 
         db.commit()  # один єдиний commit
 
+    except IntegrityError:
+        db.rollback()
+        return templates.TemplateResponse(
+            request,
+            "register.html",
+            {
+                "request": request,
+                "error": "РљРѕСЂРёСЃС‚СѓРІР°С‡ РІР¶Рµ С–СЃРЅСѓС”",
+                "email": valid_email
+            },
+            status_code=400
+        )
     finally:
         db.close()
 

@@ -1,15 +1,30 @@
 import { nacl, naclUtil } from "./crypto.js";
+import { decryptRatchetMessage, encryptRatchetMessage } from "./doubleRatchet.js";
 
-export async function encryptMessage(message, recipientPublicBase64, senderPublicBase64) {
-    return {
-        version: 2,
-        recipient: encryptForPublicKey(message, recipientPublicBase64),
-        sender: encryptForPublicKey(message, senderPublicBase64)
-    };
+export async function encryptMessage({
+    chatId,
+    message,
+    recipientPublicBase64,
+    senderPublicBase64,
+    myPrivateKeyUint8
+}) {
+    return encryptRatchetMessage({
+        chatId,
+        plaintext: message,
+        myPrivateKeyUint8,
+        myPublicKeyBase64: senderPublicBase64,
+        otherPublicKeyBase64: recipientPublicBase64,
+        senderCopyFactory: async (plaintext) => encryptForPublicKey(plaintext, senderPublicBase64),
+        senderStateFactory: async (serializedState) => encryptForPublicKey(serializedState, senderPublicBase64)
+    });
 }
 
 export function selectPayloadForCurrentUser(payload, isOwnMessage) {
     if (!payload || typeof payload !== "object") return null;
+
+    if (payload.version === 3 && (payload.ratchet || payload.sender_copy)) {
+        return isOwnMessage ? payload.sender_copy : payload.ratchet;
+    }
 
     if (payload.sender && payload.recipient) {
         return isOwnMessage ? payload.sender : payload.recipient;
@@ -22,7 +37,33 @@ export function selectPayloadForCurrentUser(payload, isOwnMessage) {
     return null;
 }
 
-export async function decryptMessage(payload, myPrivateKeyUint8) {
+export async function decryptMessage({
+    chatId,
+    payload,
+    myPrivateKeyUint8,
+    myPublicKeyBase64,
+    otherPublicKeyBase64,
+    isOwnMessage,
+    allowStateReset = true
+}) {
+    if (payload?.version === 3) {
+        return decryptRatchetMessage({
+            chatId,
+            payload,
+            myPrivateKeyUint8,
+            myPublicKeyBase64,
+            otherPublicKeyBase64,
+            isOwnMessage,
+            allowStateReset,
+            senderCopyDecryptor: (senderCopyPayload) => decryptLegacyPayload(senderCopyPayload, myPrivateKeyUint8),
+            senderStateDecryptor: (senderStatePayload) => decryptLegacyPayload(senderStatePayload, myPrivateKeyUint8)
+        });
+    }
+
+    return decryptLegacyPayload(payload, myPrivateKeyUint8);
+}
+
+function decryptLegacyPayload(payload, myPrivateKeyUint8) {
     if (!payload.epk) throw new Error("Missing epk");
 
     const epk = naclUtil.decodeBase64(payload.epk);
