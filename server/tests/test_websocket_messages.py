@@ -20,10 +20,12 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
             sender_status = sender_ws.receive_json()
             assert sender_status["type"] == "status"
             assert sender_status["is_online"] is True
+            assert sender_ws.receive_json() == {"type": "history_complete"}
 
             with second_client.websocket_connect(f"/ws/{chat_id}") as receiver_ws:
                 receiver_status = receiver_ws.receive_json()
                 assert receiver_status["type"] == "status"
+                assert receiver_ws.receive_json() == {"type": "history_complete"}
 
                 sender_ws.send_text(message_payload)
 
@@ -34,8 +36,10 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
 
     assert sender_message == {
         "type": "message",
+        "message_id": 1,
         "sender": "user1",
         "content": message_payload,
+        "historical": False,
     }
     assert receiver_message == sender_message
     assert first_notification == {"type": "new_chat"}
@@ -48,10 +52,14 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
     with second_client.websocket_connect(f"/ws/{chat_id}") as history_ws:
         history_status = history_ws.receive_json()
         history_message = history_ws.receive_json()
+        history_complete = history_ws.receive_json()
 
     assert history_status["type"] == "status"
     assert history_message == {
         "type": "message",
+        "message_id": 1,
         "sender": "user1",
         "content": message_payload,
+        "historical": True,
     }
+    assert history_complete == {"type": "history_complete"}
