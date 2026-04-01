@@ -1,4 +1,17 @@
-import { deleteRatchetState, getRatchetState, nacl, naclUtil, saveRatchetState } from "./crypto.js";
+import {
+    consumeLocalOneTimePreKey,
+    deleteRatchetState,
+    getRatchetState,
+    getSignedPreKey,
+    nacl,
+    naclUtil,
+    saveRatchetState
+} from "./crypto.js";
+import {
+    deriveInitiatorX3dhSecret,
+    deriveResponderX3dhSecret,
+    verifySignedPreKey
+} from "./x3dh.js";
 
 const MAX_SKIPPED_KEYS = 64;
 
@@ -8,10 +21,17 @@ export async function encryptRatchetMessage({
     myPrivateKeyUint8,
     myPublicKeyBase64,
     otherPublicKeyBase64,
+    recipientPrekeyBundle,
     senderCopyFactory,
     senderStateFactory
 }) {
-    let state = await getOrCreateState(chatId, myPrivateKeyUint8, myPublicKeyBase64, otherPublicKeyBase64);
+    let state = await getOrCreateState(
+        chatId,
+        myPrivateKeyUint8,
+        myPublicKeyBase64,
+        otherPublicKeyBase64,
+        recipientPrekeyBundle
+    );
 
     if (!state.CKs) {
         state = await initializeSendingChain(state, otherPublicKeyBase64);
@@ -37,8 +57,16 @@ export async function encryptRatchetMessage({
 
     await saveRatchetState(chatId, state);
 
+    let x3dh = null;
+    if (state.pendingX3dhHandshake) {
+        x3dh = state.pendingX3dhHandshake;
+        delete state.pendingX3dhHandshake;
+        await saveRatchetState(chatId, state);
+    }
+
     return {
         version: 3,
+        x3dh,
         ratchet: {
             header,
             nonce: encodeBase64(nonce),
@@ -95,7 +123,8 @@ export async function decryptRatchetMessage({
             ratchetPayload,
             myPrivateKeyUint8,
             myPublicKeyBase64,
-            otherPublicKeyBase64
+            otherPublicKeyBase64,
+            x3dhPayload: payload.x3dh || null
         });
     } catch (error) {
         if (!allowStateReset || !shouldAttemptSessionReset(error, ratchetPayload.header)) {
@@ -109,7 +138,8 @@ export async function decryptRatchetMessage({
             ratchetPayload,
             myPrivateKeyUint8,
             myPublicKeyBase64,
-            otherPublicKeyBase64
+            otherPublicKeyBase64,
+            x3dhPayload: payload.x3dh || null
         });
     }
 }
@@ -119,9 +149,17 @@ async function decryptWithState({
     ratchetPayload,
     myPrivateKeyUint8,
     myPublicKeyBase64,
-    otherPublicKeyBase64
+    otherPublicKeyBase64,
+    x3dhPayload = null
 }) {
-    let state = await getOrCreateState(chatId, myPrivateKeyUint8, myPublicKeyBase64, otherPublicKeyBase64);
+    let state = await getOrCreateState(
+        chatId,
+        myPrivateKeyUint8,
+        myPublicKeyBase64,
+        otherPublicKeyBase64,
+        null,
+        x3dhPayload
+    );
     const header = ratchetPayload.header;
 
     const skippedKeyId = buildSkippedKeyId(header.dh, header.n);
@@ -153,33 +191,29 @@ async function decryptWithState({
     return plaintext;
 }
 
-async function getOrCreateState(chatId, myPrivateKeyUint8, myPublicKeyBase64, otherPublicKeyBase64) {
+async function getOrCreateState(
+    chatId,
+    myPrivateKeyUint8,
+    myPublicKeyBase64,
+    otherPublicKeyBase64,
+    recipientPrekeyBundle = null,
+    x3dhPayload = null
+) {
     const existing = await getRatchetState(chatId);
     if (existing) {
         return normalizeState(existing);
     }
 
-    const sharedIdentitySecret = nacl.scalarMult(
+    const bootstrapState = await createInitialState({
         myPrivateKeyUint8,
-        decodeBase64(otherPublicKeyBase64)
-    );
-    const rootKey = await sha256(sharedIdentitySecret);
+        myPublicKeyBase64,
+        otherPublicKeyBase64,
+        recipientPrekeyBundle,
+        x3dhPayload
+    });
 
     const state = normalizeState({
-        RK: encodeBase64(rootKey),
-        DHs: {
-            publicKey: myPublicKeyBase64,
-            privateKey: encodeBase64(myPrivateKeyUint8)
-        },
-        DHr: null,
-        remoteIdentityKey: otherPublicKeyBase64,
-        CKs: null,
-        CKr: null,
-        Ns: 0,
-        Nr: 0,
-        PN: 0,
-        useIdentityForSending: true,
-        skippedKeys: {}
+        ...bootstrapState
     });
 
     await saveRatchetState(chatId, state);
@@ -187,7 +221,7 @@ async function getOrCreateState(chatId, myPrivateKeyUint8, myPublicKeyBase64, ot
 }
 
 async function initializeSendingChain(state, otherPublicKeyBase64) {
-    const remoteKey = state.DHr || otherPublicKeyBase64;
+    const remoteKey = state.initialRemotePreKey || state.DHr || otherPublicKeyBase64;
 
     if (state.useIdentityForSending) {
         state.DHs = serializeKeyPair(nacl.box.keyPair());
@@ -207,9 +241,130 @@ async function initializeSendingChain(state, otherPublicKeyBase64) {
     return state;
 }
 
+async function createInitialState({
+    myPrivateKeyUint8,
+    myPublicKeyBase64,
+    otherPublicKeyBase64,
+    recipientPrekeyBundle,
+    x3dhPayload
+}) {
+    if (recipientPrekeyBundle?.signed_prekey) {
+        if (
+            recipientPrekeyBundle.signing_key &&
+            recipientPrekeyBundle.signed_prekey_signature &&
+            !verifySignedPreKey({
+                signingKeyBase64: recipientPrekeyBundle.signing_key,
+                signedPreKeyBase64: recipientPrekeyBundle.signed_prekey,
+                signatureBase64: recipientPrekeyBundle.signed_prekey_signature
+            })
+        ) {
+            throw new Error("Signed prekey verification failed");
+        }
+
+        const initiatorEphemeral = nacl.box.keyPair();
+        const x3dhSecret = await deriveInitiatorX3dhSecret({
+            myIdentityPrivateKeyBase64: encodeBase64(myPrivateKeyUint8),
+            myEphemeralPrivateKeyBase64: encodeBase64(initiatorEphemeral.secretKey),
+            recipientIdentityKeyBase64: recipientPrekeyBundle.identity_key || otherPublicKeyBase64,
+            recipientSignedPreKeyBase64: recipientPrekeyBundle.signed_prekey,
+            recipientOneTimePreKeyBase64: recipientPrekeyBundle.one_time_prekey?.public_key || null
+        });
+
+        return {
+            RK: x3dhSecret,
+            DHs: {
+                publicKey: myPublicKeyBase64,
+                privateKey: encodeBase64(myPrivateKeyUint8)
+            },
+            DHr: null,
+            remoteIdentityKey: recipientPrekeyBundle.identity_key || otherPublicKeyBase64,
+            CKs: null,
+            CKr: null,
+            Ns: 0,
+            Nr: 0,
+            PN: 0,
+            useIdentityForSending: true,
+            skippedKeys: {},
+            initialPrivateKey: null,
+            initialRemotePreKey: recipientPrekeyBundle.signed_prekey,
+            pendingX3dhHandshake: {
+                initiator_identity_key: myPublicKeyBase64,
+                initiator_ephemeral_key: encodeBase64(initiatorEphemeral.publicKey),
+                signed_prekey_key_id: recipientPrekeyBundle.signed_prekey_key_id,
+                one_time_prekey_key_id: recipientPrekeyBundle.one_time_prekey?.key_id || null
+            }
+        };
+    }
+
+    if (x3dhPayload?.initiator_identity_key && x3dhPayload?.initiator_ephemeral_key) {
+        const signedPreKey = await getSignedPreKey();
+        if (!signedPreKey?.private_key) {
+            throw new Error("Missing local signed prekey");
+        }
+
+        const oneTimePreKey = x3dhPayload.one_time_prekey_key_id
+            ? await consumeLocalOneTimePreKey(x3dhPayload.one_time_prekey_key_id)
+            : null;
+
+        const x3dhSecret = await deriveResponderX3dhSecret({
+            myIdentityPrivateKeyBase64: encodeBase64(myPrivateKeyUint8),
+            mySignedPreKeyPrivateKeyBase64: signedPreKey.private_key,
+            myOneTimePreKeyPrivateKeyBase64: oneTimePreKey?.private_key || null,
+            initiatorIdentityKeyBase64: x3dhPayload.initiator_identity_key,
+            initiatorEphemeralKeyBase64: x3dhPayload.initiator_ephemeral_key
+        });
+
+        return {
+            RK: x3dhSecret,
+            DHs: {
+                publicKey: myPublicKeyBase64,
+                privateKey: encodeBase64(myPrivateKeyUint8)
+            },
+            DHr: null,
+            remoteIdentityKey: x3dhPayload.initiator_identity_key,
+            CKs: null,
+            CKr: null,
+            Ns: 0,
+            Nr: 0,
+            PN: 0,
+            useIdentityForSending: true,
+            skippedKeys: {},
+            initialPrivateKey: signedPreKey.private_key,
+            initialRemotePreKey: null,
+            pendingX3dhHandshake: null
+        };
+    }
+
+    const sharedIdentitySecret = nacl.scalarMult(
+        myPrivateKeyUint8,
+        decodeBase64(otherPublicKeyBase64)
+    );
+    const rootKey = await sha256(sharedIdentitySecret);
+
+    return {
+        RK: encodeBase64(rootKey),
+        DHs: {
+            publicKey: myPublicKeyBase64,
+            privateKey: encodeBase64(myPrivateKeyUint8)
+        },
+        DHr: null,
+        remoteIdentityKey: otherPublicKeyBase64,
+        CKs: null,
+        CKr: null,
+        Ns: 0,
+        Nr: 0,
+        PN: 0,
+        useIdentityForSending: true,
+        skippedKeys: {},
+        initialPrivateKey: null,
+        initialRemotePreKey: null,
+        pendingX3dhHandshake: null
+    };
+}
+
 async function applyDhRatchet(state, remoteDhBase64, myPrivateKeyUint8) {
     const receivingPrivateKey = (state.DHr === null && state.Ns === 0 && !state.CKs)
-        ? myPrivateKeyUint8
+        ? decodeBase64(state.initialPrivateKey || encodeBase64(myPrivateKeyUint8))
         : decodeBase64(state.DHs.privateKey);
 
     const recvRootStep = await kdfRoot(
@@ -223,6 +378,8 @@ async function applyDhRatchet(state, remoteDhBase64, myPrivateKeyUint8) {
     state.RK = encodeBase64(recvRootStep.rootKey);
     state.CKr = encodeBase64(recvRootStep.chainKey);
     state.DHr = remoteDhBase64;
+    state.initialPrivateKey = null;
+    state.initialRemotePreKey = null;
     state.PN = state.Ns;
     state.Ns = 0;
     state.Nr = 0;
@@ -341,7 +498,10 @@ function normalizeState(state) {
         Nr: state.Nr || 0,
         PN: state.PN || 0,
         useIdentityForSending: state.useIdentityForSending !== false,
-        skippedKeys: state.skippedKeys || {}
+        skippedKeys: state.skippedKeys || {},
+        initialPrivateKey: state.initialPrivateKey || null,
+        initialRemotePreKey: state.initialRemotePreKey || null,
+        pendingX3dhHandshake: state.pendingX3dhHandshake || null
     };
 }
 

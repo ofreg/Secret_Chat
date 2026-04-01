@@ -57,6 +57,7 @@ window.addEventListener("load", async function () {
                 chatId: getCurrentChatId(),
                 message: messageText,
                 recipientPublicBase64: window.otherPublicKey,
+                recipientPrekeyBundle: window.otherPrekeyBundle,
                 senderPublicBase64: myPublicKeyCache,
                 myPrivateKeyUint8: myPrivateKeyCache
             });

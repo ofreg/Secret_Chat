@@ -5,6 +5,7 @@ export async function encryptMessage({
     chatId,
     message,
     recipientPublicBase64,
+    recipientPrekeyBundle = null,
     senderPublicBase64,
     myPrivateKeyUint8
 }) {
@@ -14,6 +15,7 @@ export async function encryptMessage({
         myPrivateKeyUint8,
         myPublicKeyBase64: senderPublicBase64,
         otherPublicKeyBase64: recipientPublicBase64,
+        recipientPrekeyBundle,
         senderCopyFactory: async (plaintext) => encryptForPublicKey(plaintext, senderPublicBase64),
         senderStateFactory: async (serializedState) => encryptForPublicKey(serializedState, senderPublicBase64)
     });

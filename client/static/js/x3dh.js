@@ -45,6 +45,39 @@ export async function deriveInitiatorX3dhSecret({
     return sha256(concatUint8Arrays(parts));
 }
 
+export async function deriveResponderX3dhSecret({
+    myIdentityPrivateKeyBase64,
+    mySignedPreKeyPrivateKeyBase64,
+    myOneTimePreKeyPrivateKeyBase64 = null,
+    initiatorIdentityKeyBase64,
+    initiatorEphemeralKeyBase64
+}) {
+    const dh1 = nacl.scalarMult(
+        decodeBoxSecret(mySignedPreKeyPrivateKeyBase64),
+        decodeBoxPublic(initiatorIdentityKeyBase64)
+    );
+    const dh2 = nacl.scalarMult(
+        decodeBoxSecret(myIdentityPrivateKeyBase64),
+        decodeBoxPublic(initiatorEphemeralKeyBase64)
+    );
+    const dh3 = nacl.scalarMult(
+        decodeBoxSecret(mySignedPreKeyPrivateKeyBase64),
+        decodeBoxPublic(initiatorEphemeralKeyBase64)
+    );
+
+    const parts = [dh1, dh2, dh3];
+    if (myOneTimePreKeyPrivateKeyBase64) {
+        parts.push(
+            nacl.scalarMult(
+                decodeBoxSecret(myOneTimePreKeyPrivateKeyBase64),
+                decodeBoxPublic(initiatorEphemeralKeyBase64)
+            )
+        );
+    }
+
+    return sha256(concatUint8Arrays(parts));
+}
+
 async function sha256(bytes) {
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     return naclUtil.encodeBase64(new Uint8Array(digest));

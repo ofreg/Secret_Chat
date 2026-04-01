@@ -121,6 +121,18 @@ export async function getSignedPreKeyPublic() {
     return data?.public_key || data?.publicKey || null;
 }
 
+export async function getSignedPreKey() {
+    const db = await idbOpen();
+    const data = await db.get("keys", "signed_prekey");
+    return data ? normalizeSignedPreKey(data) : null;
+}
+
+export async function consumeLocalOneTimePreKey(keyId) {
+    const db = await idbOpen();
+    const oneTimePreKeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
+    return oneTimePreKeys.find((prekey) => prekey.key_id === Number(keyId)) || null;
+}
+
 export async function getX3dhState() {
     const db = await idbOpen();
     return {
