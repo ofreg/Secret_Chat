@@ -4,6 +4,7 @@ import { openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
 
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
+const SIGNED_PREKEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 async function idbOpen() {
     return openDB("e2ee_chat", 4, {
@@ -45,7 +46,10 @@ function generatePreKeyPair() {
     return {
         key_id: buildPreKeyId(),
         public_key: naclUtil.encodeBase64(keyPair.publicKey),
-        private_key: naclUtil.encodeBase64(keyPair.secretKey)
+        private_key: naclUtil.encodeBase64(keyPair.secretKey),
+        created_at: new Date().toISOString(),
+        is_used: false,
+        used_at: null
     };
 }
 
@@ -130,7 +134,21 @@ export async function getSignedPreKey() {
 export async function consumeLocalOneTimePreKey(keyId) {
     const db = await idbOpen();
     const oneTimePreKeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
-    return oneTimePreKeys.find((prekey) => prekey.key_id === Number(keyId)) || null;
+    const keyIndex = oneTimePreKeys.findIndex((prekey) => prekey.key_id === Number(keyId));
+    if (keyIndex === -1) {
+        return null;
+    }
+
+    if (!oneTimePreKeys[keyIndex].is_used) {
+        oneTimePreKeys[keyIndex] = {
+            ...oneTimePreKeys[keyIndex],
+            is_used: true,
+            used_at: new Date().toISOString()
+        };
+        await db.put("keys", oneTimePreKeys, "one_time_prekeys");
+    }
+
+    return oneTimePreKeys[keyIndex];
 }
 
 export async function getX3dhState() {
@@ -138,8 +156,8 @@ export async function getX3dhState() {
     return {
         identity: await db.get("keys", "identity"),
         signing: await db.get("keys", "signing"),
-        signedPreKey: await db.get("keys", "signed_prekey"),
-        oneTimePreKeys: (await db.get("keys", "one_time_prekeys")) || []
+        signedPreKey: normalizeSignedPreKey(await db.get("keys", "signed_prekey")),
+        oneTimePreKeys: normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || [])
     };
 }
 
@@ -162,7 +180,7 @@ export async function initKeysIfNeeded() {
         await db.put("keys", signing, "signing");
     }
 
-    if (!signedPreKey) {
+    if (!signedPreKey || shouldRotateSignedPreKey(signedPreKey)) {
         console.log("Generating signed prekey");
         signedPreKey = createSignedPreKey(signing);
         await db.put("keys", signedPreKey, "signed_prekey");
@@ -171,8 +189,9 @@ export async function initKeysIfNeeded() {
         await db.put("keys", signedPreKey, "signed_prekey");
     }
 
-    if (oneTimePreKeys.length < PREKEY_BATCH_SIZE) {
-        const missingCount = PREKEY_BATCH_SIZE - oneTimePreKeys.length;
+    const availablePreKeys = oneTimePreKeys.filter((prekey) => !prekey.is_used);
+    if (availablePreKeys.length < PREKEY_BATCH_SIZE) {
+        const missingCount = PREKEY_BATCH_SIZE - availablePreKeys.length;
         const replenished = Array.from({ length: missingCount }, () => generatePreKeyPair());
         oneTimePreKeys = [...oneTimePreKeys, ...replenished];
         await db.put("keys", oneTimePreKeys, "one_time_prekeys");
@@ -207,10 +226,12 @@ export async function initKeysIfNeeded() {
                 signed_prekey: signedPreKey.public_key,
                 signed_prekey_signature: signedPreKey.signature,
                 signed_prekey_key_id: signedPreKey.key_id,
-                one_time_prekeys: oneTimePreKeys.map((prekey) => ({
+                one_time_prekeys: oneTimePreKeys
+                    .filter((prekey) => !prekey.is_used)
+                    .map((prekey) => ({
                     key_id: prekey.key_id,
                     public_key: prekey.public_key
-                }))
+                    }))
             })
         });
 
@@ -242,7 +263,8 @@ function createSignedPreKey(signingKeys) {
 
     return {
         ...preKey,
-        signature: naclUtil.encodeBase64(signature)
+        signature: naclUtil.encodeBase64(signature),
+        created_at: new Date().toISOString()
     };
 }
 
@@ -255,7 +277,10 @@ function normalizeOneTimePreKeys(prekeys) {
         .map((prekey) => ({
             key_id: normalizePreKeyId(prekey?.key_id ?? prekey?.keyId ?? null),
             public_key: prekey?.public_key ?? prekey?.publicKey ?? null,
-            private_key: prekey?.private_key ?? prekey?.privateKey ?? null
+            private_key: prekey?.private_key ?? prekey?.privateKey ?? null,
+            created_at: prekey?.created_at ?? prekey?.createdAt ?? null,
+            is_used: Boolean(prekey?.is_used ?? prekey?.isUsed ?? false),
+            used_at: prekey?.used_at ?? prekey?.usedAt ?? null
         }))
         .filter((prekey) => prekey.key_id && prekey.public_key && prekey.private_key);
 }
@@ -265,7 +290,8 @@ function normalizeSignedPreKey(prekey) {
         ...prekey,
         key_id: normalizePreKeyId(prekey?.key_id ?? prekey?.keyId ?? null),
         public_key: prekey?.public_key ?? prekey?.publicKey ?? null,
-        private_key: prekey?.private_key ?? prekey?.privateKey ?? null
+        private_key: prekey?.private_key ?? prekey?.privateKey ?? null,
+        created_at: prekey?.created_at ?? prekey?.createdAt ?? new Date().toISOString()
     };
 }
 
@@ -276,6 +302,17 @@ function normalizePreKeyId(keyId) {
     }
 
     return (Math.trunc(numericId) % MAX_PREKEY_ID) || buildPreKeyId();
+}
+
+function shouldRotateSignedPreKey(prekey) {
+    const normalized = normalizeSignedPreKey(prekey);
+    const createdAt = Date.parse(normalized.created_at);
+
+    if (!Number.isFinite(createdAt)) {
+        return true;
+    }
+
+    return Date.now() - createdAt >= SIGNED_PREKEY_ROTATION_MS;
 }
 
 export async function fingerprint(base64Key) {

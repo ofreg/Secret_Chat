@@ -44,6 +44,19 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
         "one_time_prekey": {"key_id": 1001, "public_key": "otpk-user2-1"},
     }
 
+    response = client.post("/messages/start", data={"username": "user2"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chat_id"] == 1
+    assert payload["prekey_bundle"] == {
+        "identity_key": "identity-user2",
+        "signing_key": "signing-user2",
+        "signed_prekey": "signed-prekey-user2",
+        "signed_prekey_signature": "signed-prekey-signature-user2",
+        "signed_prekey_key_id": 101,
+        "one_time_prekey": {"key_id": 1002, "public_key": "otpk-user2-2"},
+    }
+
     response = client.get("/messages/get_keys", params={"chat_id": 1})
     assert response.status_code == 200
     payload = response.json()
@@ -85,6 +98,32 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
             "signed_prekey": "signed-prekey-user2",
             "signed_prekey_signature": "signed-prekey-signature-user2",
             "signed_prekey_key_id": 101,
+            "one_time_prekey": None,
+        },
+    }
+
+    assert upload_x3dh_keys(
+        second_client,
+        public_key="public-key-user2",
+        identity_key="identity-user2",
+        signing_key="signing-user2",
+        signed_prekey="signed-prekey-user2-v2",
+        signed_prekey_signature="signed-prekey-signature-user2-v2",
+        signed_prekey_key_id=202,
+        one_time_prekeys=[],
+    ).status_code == 200
+
+    response = client.get("/users/prekey-bundle", params={"username": "user2"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "username": "user2",
+        "bundle": {
+            "identity_key": "identity-user2",
+            "signing_key": "signing-user2",
+            "signed_prekey": "signed-prekey-user2-v2",
+            "signed_prekey_signature": "signed-prekey-signature-user2-v2",
+            "signed_prekey_key_id": 202,
             "one_time_prekey": None,
         },
     }
