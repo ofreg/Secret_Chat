@@ -71,7 +71,7 @@ window.addEventListener("load", async function () {
     initUserSearch({
         onChatStarted: async (chatData) => {
             currentChatId = String(chatData.chat_id);
-            await applyChatKeys(chatData.public_key, chatData.identity_key);
+            await applyChatKeys(chatData.public_key, chatData.identity_key, chatData.prekey_bundle);
             openChatSocket(chatData.chat_id);
             await loadChats();
             window.location.search = "?chat_id=" + chatData.chat_id;
@@ -88,13 +88,14 @@ async function initializeChat(chatId) {
         return;
     }
 
-    await applyChatKeys(data.public_key, data.identity_key);
+    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle);
     openChatSocket(chatId);
 }
 
-async function applyChatKeys(publicKey, identityKey) {
+async function applyChatKeys(publicKey, identityKey, prekeyBundle = null) {
     window.otherPublicKey = publicKey;
     window.otherIdentityKey = identityKey;
+    window.otherPrekeyBundle = prekeyBundle;
     keysReady = true;
 
     const fp = await fingerprint(window.otherPublicKey);

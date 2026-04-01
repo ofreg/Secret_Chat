@@ -1,12 +1,11 @@
-from sqlalchemy import String
-from sqlalchemy.orm import Mapped, mapped_column
-from .base import Base
-from sqlalchemy import ForeignKey, DateTime
 from datetime import datetime
-from sqlalchemy import Integer, Text
-from sqlalchemy.orm import relationship
-from sqlalchemy import UniqueConstraint
-import random
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -14,9 +13,13 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True)
     password: Mapped[str] = mapped_column(String)
 
-    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # ← замінив name
+    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     public_key: Mapped[str] = mapped_column(Text, nullable=True)
     identity_key: Mapped[str] = mapped_column(Text, nullable=True)
+    signing_key: Mapped[str] = mapped_column(Text, nullable=True)
+    signed_prekey: Mapped[str] = mapped_column(Text, nullable=True)
+    signed_prekey_signature: Mapped[str] = mapped_column(Text, nullable=True)
+    signed_prekey_key_id: Mapped[int] = mapped_column(Integer, nullable=True)
 
 
 class RefreshToken(Base):
@@ -31,9 +34,6 @@ class RefreshToken(Base):
     ip_address: Mapped[str] = mapped_column(String, nullable=True)
 
 
-
-
-
 class Chat(Base):
     __tablename__ = "chats"
 
@@ -42,13 +42,10 @@ class Chat(Base):
     user1_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     user2_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
-    # Додані відносини до таблиці користувачів
     user1: Mapped["User"] = relationship("User", foreign_keys=[user1_id])
     user2: Mapped["User"] = relationship("User", foreign_keys=[user2_id])
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         UniqueConstraint("user1_id", "user2_id"),
@@ -65,6 +62,21 @@ class Message(Base):
 
     content: Mapped[str] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class OneTimePreKey(Base):
+    __tablename__ = "one_time_prekeys"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    key_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "key_id"),
     )

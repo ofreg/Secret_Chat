@@ -4,7 +4,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, or_, and_
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, AsyncSessionLocal
-from app.db.models import User, Chat, Message
+from datetime import datetime
+
+from app.db.models import Chat, Message, OneTimePreKey, User
 from app.dependencies.auth import get_current_user
 from app.utils.jwt import decode_access_token
 from app.utils.websocket_manager import manager
@@ -102,6 +104,8 @@ async def start_chat_json(
         chat = result.scalar_one_or_none()
 
         # якщо чату немає — створюємо
+        is_new_chat = chat is None
+
         if not chat:
             chat = Chat(user1_id=u1, user2_id=u2)
             db.add(chat)
@@ -113,6 +117,11 @@ async def start_chat_json(
             "chat_id": chat.id,
             "public_key": other_user.public_key,
             "identity_key": other_user.identity_key,
+            "prekey_bundle": await (
+                issue_prekey_bundle(other_user.id, db)
+                if is_new_chat
+                else peek_prekey_bundle(other_user.id, db)
+            ),
             "username": other_user.username
         }
 # ---------------- WEBSOCKET USER ----------------
@@ -282,10 +291,95 @@ async def get_keys(chat_id: int, current_user: User = Depends(get_current_user))
             "status": "ok",
             "public_key": public_key,
             "identity_key": identity_key,
+            "prekey_bundle": await peek_prekey_bundle(other_user.id, db),
             "username": other_user.username
+        }
+
+
+@router.get("/users/prekey-bundle")
+async def get_prekey_bundle(username: str, current_user: User = Depends(get_current_user)):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User).where(User.username == username))
+        other_user = result.scalar_one_or_none()
+
+        if not other_user or other_user.id == current_user.id:
+            return {"status": "error", "message": "Користувача не знайдено"}
+
+        return {
+            "status": "ok",
+            "username": other_user.username,
+            "bundle": await issue_prekey_bundle(other_user.id, db)
         }
     
 
 @router.get("/users/me")
 def users_me(current_user: User = Depends(get_current_user)):
     return {"status": "ok", "username": current_user.username, "id": current_user.id}
+
+
+async def issue_prekey_bundle(user_id: int, db: AsyncSession):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return None
+
+    result = await db.execute(
+        select(OneTimePreKey)
+        .where(
+            OneTimePreKey.user_id == user_id,
+            OneTimePreKey.used_at.is_(None)
+        )
+        .order_by(OneTimePreKey.id)
+        .limit(1)
+    )
+    one_time_prekey = result.scalar_one_or_none()
+
+    one_time_payload = None
+    if one_time_prekey:
+        one_time_prekey.used_at = datetime.utcnow()
+        await db.commit()
+        one_time_payload = {
+            "key_id": one_time_prekey.key_id,
+            "public_key": one_time_prekey.public_key
+        }
+
+    return {
+        "identity_key": user.identity_key or user.public_key or "",
+        "signing_key": user.signing_key or "",
+        "signed_prekey": user.signed_prekey or "",
+        "signed_prekey_signature": user.signed_prekey_signature or "",
+        "signed_prekey_key_id": user.signed_prekey_key_id,
+        "one_time_prekey": one_time_payload
+    }
+
+
+async def peek_prekey_bundle(user_id: int, db: AsyncSession):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return None
+
+    result = await db.execute(
+        select(OneTimePreKey)
+        .where(
+            OneTimePreKey.user_id == user_id,
+            OneTimePreKey.used_at.is_(None)
+        )
+        .order_by(OneTimePreKey.id)
+        .limit(1)
+    )
+    one_time_prekey = result.scalar_one_or_none()
+
+    return {
+        "identity_key": user.identity_key or user.public_key or "",
+        "signing_key": user.signing_key or "",
+        "signed_prekey": user.signed_prekey or "",
+        "signed_prekey_signature": user.signed_prekey_signature or "",
+        "signed_prekey_key_id": user.signed_prekey_key_id,
+        "one_time_prekey": {
+            "key_id": one_time_prekey.key_id,
+            "public_key": one_time_prekey.public_key
+        } if one_time_prekey else None
+    }

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from app.db.session import SessionLocal
-from app.db.models import User, RefreshToken
+from app.db.models import OneTimePreKey, RefreshToken, User
 import os
 from fastapi.templating import Jinja2Templates
 from app.utils.security import hash_password, verify_password
@@ -30,7 +30,8 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from fastapi.templating import Jinja2Templates
 from fastapi import Request, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import List
 email_adapter = TypeAdapter(EmailStr)
 
 router = APIRouter()
@@ -41,8 +42,19 @@ templates = Jinja2Templates(
 REFRESH_TOKEN_EXPIRE_DAYS = int(
     os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7)
 )
+class OneTimePreKeySchema(BaseModel):
+    key_id: int
+    public_key: str
+
+
 class PublicKeySchema(BaseModel):
     public_key: str
+    identity_key: str | None = None
+    signing_key: str | None = None
+    signed_prekey: str | None = None
+    signed_prekey_signature: str | None = None
+    signed_prekey_key_id: int | None = None
+    one_time_prekeys: List[OneTimePreKeySchema] = Field(default_factory=list)
 
 # --------------------- РЕЄСТРАЦІЯ ---------------------
 
@@ -420,6 +432,44 @@ def upload_keys(data: PublicKeySchema, current_user: User = Depends(get_current_
 
         user.public_key = data.public_key
         db.commit()
+    finally:
+        db.close()
+
+    return {"status": "ok"}
+
+
+@router.post("/users/x3dh-keys")
+def upload_x3dh_keys(data: PublicKeySchema, current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            return {"status": "error", "message": "Користувач не знайдений"}
+
+        user.public_key = data.public_key
+        user.identity_key = data.identity_key or data.public_key
+        user.signing_key = data.signing_key
+        user.signed_prekey = data.signed_prekey
+        user.signed_prekey_signature = data.signed_prekey_signature
+        user.signed_prekey_key_id = data.signed_prekey_key_id
+
+        db.query(OneTimePreKey).filter(
+            OneTimePreKey.user_id == user.id
+        ).delete()
+
+        for prekey in data.one_time_prekeys:
+            db.add(
+                OneTimePreKey(
+                    user_id=user.id,
+                    key_id=prekey.key_id,
+                    public_key=prekey.public_key
+                )
+            )
+
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return {"status": "error", "message": str(exc)}
     finally:
         db.close()
 

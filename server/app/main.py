@@ -9,6 +9,7 @@ import os
 from app.routers import auth, messages
 from app.db.base import Base
 from app.db.session import engine
+from sqlalchemy import inspect, text
 from fastapi.staticfiles import StaticFiles
 # ---------------------- Конфіг ----------------------
 login_attempts = defaultdict(list)
@@ -27,6 +28,24 @@ app.mount(
 )
 
 # ---------------------- DB ----------------------
+Base.metadata.create_all(bind=engine)
+ensure_schema_sql = [
+    ("users", "signing_key", "ALTER TABLE users ADD COLUMN signing_key TEXT"),
+    ("users", "signed_prekey", "ALTER TABLE users ADD COLUMN signed_prekey TEXT"),
+    ("users", "signed_prekey_signature", "ALTER TABLE users ADD COLUMN signed_prekey_signature TEXT"),
+    ("users", "signed_prekey_key_id", "ALTER TABLE users ADD COLUMN signed_prekey_key_id INTEGER"),
+]
+
+inspector = inspect(engine)
+existing_tables = set(inspector.get_table_names())
+
+with engine.begin() as connection:
+    if "users" in existing_tables:
+        existing_user_columns = {column["name"] for column in inspector.get_columns("users")}
+        for table_name, column_name, ddl in ensure_schema_sql:
+            if column_name not in existing_user_columns:
+                connection.execute(text(ddl))
+
 Base.metadata.create_all(bind=engine)
 
 # ---------------------- Роутери ----------------------

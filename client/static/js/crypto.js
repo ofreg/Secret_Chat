@@ -1,11 +1,12 @@
 import nacl from "https://cdn.jsdelivr.net/npm/tweetnacl/+esm";
 import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
 import { openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
-/* ----------- CRYPTO HELPERS ----------- */
 
-// ---------- Open DB ----------
+const PREKEY_BATCH_SIZE = 10;
+const MAX_PREKEY_ID = 2147483647;
+
 async function idbOpen() {
-    return openDB("e2ee_chat", 3, {
+    return openDB("e2ee_chat", 4, {
         upgrade(db) {
             if (!db.objectStoreNames.contains("keys")) {
                 db.createObjectStore("keys");
@@ -20,7 +21,6 @@ async function idbOpen() {
     });
 }
 
-// ---------- Generate Identity Key ----------
 export async function generateIdentityKeys() {
     const keyPair = nacl.box.keyPair();
 
@@ -30,13 +30,34 @@ export async function generateIdentityKeys() {
     };
 }
 
-// ---------- Save keys ----------
+export async function generateSigningKeys() {
+    const keyPair = nacl.sign.keyPair();
+
+    return {
+        publicKey: naclUtil.encodeBase64(keyPair.publicKey),
+        privateKey: naclUtil.encodeBase64(keyPair.secretKey)
+    };
+}
+
+function generatePreKeyPair() {
+    const keyPair = nacl.box.keyPair();
+
+    return {
+        key_id: buildPreKeyId(),
+        public_key: naclUtil.encodeBase64(keyPair.publicKey),
+        private_key: naclUtil.encodeBase64(keyPair.secretKey)
+    };
+}
+
+function buildPreKeyId() {
+    return Math.floor(Math.random() * (MAX_PREKEY_ID - 1)) + 1;
+}
+
 export async function saveIdentityKey(keys) {
     const db = await idbOpen();
     await db.put("keys", keys, "identity");
 }
 
-// ---------- Load private ----------
 export async function getPrivateKeyUint8() {
     const db = await idbOpen();
     const data = await db.get("keys", "identity");
@@ -46,7 +67,6 @@ export async function getPrivateKeyUint8() {
     return naclUtil.decodeBase64(data.privateKey);
 }
 
-// ---------- Load public ----------
 export async function getPublicKey() {
     const db = await idbOpen();
     const data = await db.get("keys", "identity");
@@ -89,26 +109,67 @@ export async function getLastSeenMessageId(chatId) {
     return (await db.get("messages", `meta:lastSeen:${chatId}`)) || 0;
 }
 
-// ---------- Init ----------
-export async function initKeysIfNeeded() {
+export async function getSigningPublicKey() {
+    const db = await idbOpen();
+    const data = await db.get("keys", "signing");
+    return data?.publicKey || null;
+}
 
+export async function getSignedPreKeyPublic() {
+    const db = await idbOpen();
+    const data = await db.get("keys", "signed_prekey");
+    return data?.public_key || data?.publicKey || null;
+}
+
+export async function getX3dhState() {
+    const db = await idbOpen();
+    return {
+        identity: await db.get("keys", "identity"),
+        signing: await db.get("keys", "signing"),
+        signedPreKey: await db.get("keys", "signed_prekey"),
+        oneTimePreKeys: (await db.get("keys", "one_time_prekeys")) || []
+    };
+}
+
+export async function initKeysIfNeeded() {
     const db = await idbOpen();
     let identity = await db.get("keys", "identity");
+    let signing = await db.get("keys", "signing");
+    let signedPreKey = await db.get("keys", "signed_prekey");
+    let oneTimePreKeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
 
     if (!identity) {
-
-        console.log("Generating new keys");
-
+        console.log("Generating new identity encryption keys");
         identity = await generateIdentityKeys();
-
         await db.put("keys", identity, "identity");
+    }
+
+    if (!signing) {
+        console.log("Generating new identity signing keys");
+        signing = await generateSigningKeys();
+        await db.put("keys", signing, "signing");
+    }
+
+    if (!signedPreKey) {
+        console.log("Generating signed prekey");
+        signedPreKey = createSignedPreKey(signing);
+        await db.put("keys", signedPreKey, "signed_prekey");
+    } else {
+        signedPreKey = normalizeSignedPreKey(signedPreKey);
+        await db.put("keys", signedPreKey, "signed_prekey");
+    }
+
+    if (oneTimePreKeys.length < PREKEY_BATCH_SIZE) {
+        const missingCount = PREKEY_BATCH_SIZE - oneTimePreKeys.length;
+        const replenished = Array.from({ length: missingCount }, () => generatePreKeyPair());
+        oneTimePreKeys = [...oneTimePreKeys, ...replenished];
+        await db.put("keys", oneTimePreKeys, "one_time_prekeys");
     }
 
     console.log("Syncing public key with server");
 
     try {
-
-        const res = await fetch("/users/keys", {
+        const legacyResponse = await fetch("/users/keys", {
             method: "POST",
             credentials: "include",
             headers: {
@@ -119,24 +180,98 @@ export async function initKeysIfNeeded() {
             })
         });
 
-        const data = await res.json();
+        console.log("Legacy key sync:", await legacyResponse.json());
 
-        console.log("Server response:", data);
+        const x3dhResponse = await fetch("/users/x3dh-keys", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                public_key: identity.publicKey,
+                identity_key: identity.publicKey,
+                signing_key: signing.publicKey,
+                signed_prekey: signedPreKey.public_key,
+                signed_prekey_signature: signedPreKey.signature,
+                signed_prekey_key_id: signedPreKey.key_id,
+                one_time_prekeys: oneTimePreKeys.map((prekey) => ({
+                    key_id: prekey.key_id,
+                    public_key: prekey.public_key
+                }))
+            })
+        });
 
+        const x3dhRawResponse = await x3dhResponse.text();
+        let x3dhPayload;
+
+        try {
+            x3dhPayload = JSON.parse(x3dhRawResponse);
+        } catch {
+            x3dhPayload = { raw: x3dhRawResponse };
+        }
+
+        if (!x3dhResponse.ok || x3dhPayload?.status === "error") {
+            console.error("X3DH key sync failed:", x3dhPayload);
+        } else {
+            console.log("X3DH key sync:", x3dhPayload);
+        }
     } catch (err) {
         console.error("Key upload failed", err);
     }
 }
 
-// ---------- Fingerprint ----------
+function createSignedPreKey(signingKeys) {
+    const preKey = generatePreKeyPair();
+    const signature = nacl.sign.detached(
+        naclUtil.decodeBase64(preKey.public_key),
+        naclUtil.decodeBase64(signingKeys.privateKey)
+    );
+
+    return {
+        ...preKey,
+        signature: naclUtil.encodeBase64(signature)
+    };
+}
+
+function normalizeOneTimePreKeys(prekeys) {
+    if (!Array.isArray(prekeys)) {
+        return [];
+    }
+
+    return prekeys
+        .map((prekey) => ({
+            key_id: normalizePreKeyId(prekey?.key_id ?? prekey?.keyId ?? null),
+            public_key: prekey?.public_key ?? prekey?.publicKey ?? null,
+            private_key: prekey?.private_key ?? prekey?.privateKey ?? null
+        }))
+        .filter((prekey) => prekey.key_id && prekey.public_key && prekey.private_key);
+}
+
+function normalizeSignedPreKey(prekey) {
+    return {
+        ...prekey,
+        key_id: normalizePreKeyId(prekey?.key_id ?? prekey?.keyId ?? null),
+        public_key: prekey?.public_key ?? prekey?.publicKey ?? null,
+        private_key: prekey?.private_key ?? prekey?.privateKey ?? null
+    };
+}
+
+function normalizePreKeyId(keyId) {
+    const numericId = Number(keyId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+        return buildPreKeyId();
+    }
+
+    return (Math.trunc(numericId) % MAX_PREKEY_ID) || buildPreKeyId();
+}
+
 export async function fingerprint(base64Key) {
-
-    const data = Uint8Array.from(atob(base64Key), c => c.charCodeAt(0));
-
+    const data = Uint8Array.from(atob(base64Key), (c) => c.charCodeAt(0));
     const hash = await crypto.subtle.digest("SHA-256", data);
 
     return Array.from(new Uint8Array(hash))
-        .map(b => b.toString(16).padStart(2, "0"))
+        .map((b) => b.toString(16).padStart(2, "0"))
         .join(":");
 }
 
