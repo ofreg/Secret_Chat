@@ -41,6 +41,92 @@
 
 .online { background: #2ecc71; }
 .offline { background: #ccc; }
+
+.safety-card {
+    border: 1px solid #d8dee9;
+    border-radius: 12px;
+    padding: 12px;
+    margin: 12px 0;
+    background: #f8fafc;
+}
+
+.safety-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.safety-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.08em;
+}
+
+.safety-fingerprint {
+    font-family: monospace;
+    font-size: 13px;
+    word-break: break-all;
+    color: #0f172a;
+}
+
+.verify-badge {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.verify-badge.verified {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.verify-badge.unverified {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.safety-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.safety-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.safety-btn.primary {
+    background: #0f766e;
+    color: white;
+}
+
+.safety-btn.secondary {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.qr-block {
+    margin-top: 12px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.qr-hint {
+    font-size: 13px;
+    color: #475569;
+    max-width: 280px;
+}
 </style>
 
 {% if other_public_key %}
@@ -50,15 +136,9 @@ window.otherIdentityKey = "{{ other_identity_key }}";
 </script>
 {% endif %}
 
-<script type="module" src="/static/js/messages.js"></script>
-
-<div>
-    Fingerprint:
-    <span id="fingerprint"></span>
-</div>
+<script type="module" src="/static/js/messages.js?v=20260401a"></script>
 
 <div class="container">
-
     <div class="sidebar">
         <h3>Ваші чати</h3>
 
@@ -84,12 +164,33 @@ window.otherIdentityKey = "{{ other_identity_key }}";
     </div>
 
     <div class="chat-area">
-
         {% if request.query_params.get("chat_id") %}
-
         <div class="chat-header">
             <span class="status-dot offline" id="userStatus"></span>
             <span id="chatUserName">Співрозмовник</span>
+        </div>
+
+        <div class="safety-card">
+            <div class="safety-row">
+                <div>
+                    <div class="safety-label">Safety Fingerprint</div>
+                    <div class="safety-fingerprint" id="fingerprint"></div>
+                </div>
+                <span class="verify-badge unverified" id="verificationStatus">Not verified</span>
+            </div>
+
+            <div class="safety-actions">
+                <button class="safety-btn primary" id="verifyFingerprintBtn" type="button">Verify</button>
+                <button class="safety-btn secondary" id="resetFingerprintBtn" type="button">Reset</button>
+                <button class="safety-btn secondary" id="copyFingerprintBtn" type="button">Copy</button>
+            </div>
+
+            <div class="qr-block">
+                <canvas id="fingerprintQr" width="128" height="128"></canvas>
+                <div class="qr-hint">
+                    Scan or compare this QR / fingerprint with your contact on another trusted channel to reduce MITM risk.
+                </div>
+            </div>
         </div>
 
         <div class="messages" id="chat"></div>
@@ -98,13 +199,10 @@ window.otherIdentityKey = "{{ other_identity_key }}";
             <input id="messageInput" placeholder="Повідомлення">
             <button onclick="sendMessage()">Надіслати</button>
         </div>
-
         {% else %}
             <p>Оберіть чат або знайдіть користувача</p>
         {% endif %}
-
     </div>
-
 </div>
 
 {% endblock %}

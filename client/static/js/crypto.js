@@ -113,6 +113,17 @@ export async function getLastSeenMessageId(chatId) {
     return (await db.get("messages", `meta:lastSeen:${chatId}`)) || 0;
 }
 
+export async function saveVerificationStatus(fingerprintValue, isVerified) {
+    const db = await idbOpen();
+    await db.put("messages", { isVerified }, `verify:${fingerprintValue}`);
+}
+
+export async function getVerificationStatus(fingerprintValue) {
+    const db = await idbOpen();
+    const record = await db.get("messages", `verify:${fingerprintValue}`);
+    return Boolean(record?.isVerified);
+}
+
 export async function getSigningPublicKey() {
     const db = await idbOpen();
     const data = await db.get("keys", "signing");

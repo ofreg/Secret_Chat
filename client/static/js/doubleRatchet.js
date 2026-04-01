@@ -6,13 +6,13 @@ import {
     nacl,
     naclUtil,
     saveRatchetState
-} from "./crypto.js";
+} from "./crypto.js?v=20260401a";
 import {
     deriveInitiatorX3dhSecret,
     deriveResponderX3dhSecret,
     verifySignedPreKey
-} from "./x3dh.js";
-import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js";
+} from "./x3dh.js?v=20260401a";
+import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260401a";
 
 const MAX_SKIPPED_KEYS = 64;
 const RATCHET_STATE_VERSION = 2;
@@ -612,11 +612,11 @@ function normalizeSkippedKeys(skippedKeys) {
 }
 
 async function buildMessageMac(header, nonceBytes, ciphertextBytes, macKey) {
-    const aad = naclUtil.decodeUTF8(JSON.stringify(header));
-    const macInput = new Uint8Array(aad.length + nonceBytes.length + ciphertextBytes.length);
-    macInput.set(aad, 0);
-    macInput.set(nonceBytes, aad.length);
-    macInput.set(ciphertextBytes, aad.length + nonceBytes.length);
+    const headerBytes = encodeHeaderForMac(header);
+    const macInput = new Uint8Array(headerBytes.length + nonceBytes.length + ciphertextBytes.length);
+    macInput.set(headerBytes, 0);
+    macInput.set(nonceBytes, headerBytes.length);
+    macInput.set(ciphertextBytes, headerBytes.length + nonceBytes.length);
     return hmacSha256(macKey, macInput);
 }
 
@@ -631,4 +631,31 @@ function constantTimeEqual(left, right) {
     }
 
     return diff === 0;
+}
+
+function encodeHeaderForMac(header) {
+    const dhBytes = naclUtil.decodeUTF8(String(header?.dh || ""));
+    const pnBytes = encodeUint32(header?.pn || 0);
+    const nBytes = encodeUint32(header?.n || 0);
+    const separator = Uint8Array.from([0]);
+    const result = new Uint8Array(dhBytes.length + separator.length + pnBytes.length + nBytes.length);
+
+    let offset = 0;
+    result.set(dhBytes, offset);
+    offset += dhBytes.length;
+    result.set(separator, offset);
+    offset += separator.length;
+    result.set(pnBytes, offset);
+    offset += pnBytes.length;
+    result.set(nBytes, offset);
+
+    return result;
+}
+
+function encodeUint32(value) {
+    const normalized = Number.isFinite(Number(value)) ? Number(value) >>> 0 : 0;
+    const bytes = new Uint8Array(4);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, normalized, false);
+    return bytes;
 }

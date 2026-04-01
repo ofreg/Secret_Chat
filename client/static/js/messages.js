@@ -5,12 +5,15 @@ import {
     getPrivateKeyUint8,
     getPublicKey,
     fingerprint,
+    getVerificationStatus,
     initKeysIfNeeded,
+    saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js";
-import { initUserSearch } from "./userSearch.js";
+} from "./crypto.js?v=20260401a";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260401a";
+import { initUserSearch } from "./userSearch.js?v=20260401a";
+import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
 let pendingMessages = [];
@@ -23,6 +26,7 @@ let renderedMessageIds = new Set();
 let historySyncInProgress = false;
 let deferredLiveMessages = [];
 let chatTranscript = [];
+let currentFingerprint = null;
 
 window.addEventListener("load", async function () {
     await initKeysIfNeeded();
@@ -99,9 +103,12 @@ async function applyChatKeys(publicKey, identityKey, prekeyBundle = null) {
     window.otherPrekeyBundle = prekeyBundle;
     keysReady = true;
 
-    const fp = await fingerprint(window.otherPublicKey);
+    const verificationKey = window.otherIdentityKey || window.otherPublicKey;
+    const fp = await fingerprint(verificationKey);
+    currentFingerprint = fp;
     const el = document.getElementById("fingerprint");
     if (el) el.innerText = fp;
+    await updateVerificationUi(fp, verificationKey);
 }
 
 async function openChatSocket(chatId) {
@@ -410,4 +417,55 @@ function tryParsePayload(content) {
     } catch {
         return null;
     }
+}
+
+async function updateVerificationUi(fp, verificationKey) {
+    const statusEl = document.getElementById("verificationStatus");
+    const verifyBtn = document.getElementById("verifyFingerprintBtn");
+    const resetBtn = document.getElementById("resetFingerprintBtn");
+    const copyBtn = document.getElementById("copyFingerprintBtn");
+    const qrCanvas = document.getElementById("fingerprintQr");
+
+    if (!statusEl || !verifyBtn || !resetBtn || !copyBtn || !qrCanvas) {
+        return;
+    }
+
+    const isVerified = await getVerificationStatus(fp);
+    statusEl.textContent = isVerified ? "Verified" : "Not verified";
+    statusEl.classList.toggle("verified", isVerified);
+    statusEl.classList.toggle("unverified", !isVerified);
+
+    verifyBtn.onclick = async function () {
+        await saveVerificationStatus(fp, true);
+        await updateVerificationUi(fp, verificationKey);
+    };
+
+    resetBtn.onclick = async function () {
+        await saveVerificationStatus(fp, false);
+        await updateVerificationUi(fp, verificationKey);
+    };
+
+    copyBtn.onclick = async function () {
+        try {
+            await navigator.clipboard.writeText(fp);
+            alert("Fingerprint copied");
+        } catch {
+            alert(fp);
+        }
+    };
+
+    const qrPayload = JSON.stringify({
+        type: "chat-fingerprint",
+        fingerprint: fp,
+        identity_key: verificationKey
+    });
+
+    await QRCode.toCanvas(qrCanvas, qrPayload, {
+        width: 128,
+        margin: 1,
+        color: {
+            dark: "#0f172a",
+            light: "#f8fafc"
+        }
+    });
 }
