@@ -12,8 +12,10 @@ import {
     deriveResponderX3dhSecret,
     verifySignedPreKey
 } from "./x3dh.js";
+import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js";
 
 const MAX_SKIPPED_KEYS = 64;
+const RATCHET_STATE_VERSION = 2;
 
 export async function encryptRatchetMessage({
     chatId,
@@ -52,8 +54,9 @@ export async function encryptRatchetMessage({
     const ciphertext = nacl.secretbox(
         naclUtil.decodeUTF8(plaintext),
         nonce,
-        chainStep.messageKey
+        chainStep.encryptionKey
     );
+    const mac = await buildMessageMac(header, nonce, ciphertext, chainStep.macKey);
 
     await saveRatchetState(chatId, state);
 
@@ -70,7 +73,8 @@ export async function encryptRatchetMessage({
         ratchet: {
             header,
             nonce: encodeBase64(nonce),
-            ciphertext: encodeBase64(ciphertext)
+            ciphertext: encodeBase64(ciphertext),
+            mac: encodeBase64(mac)
         },
         sender_copy: await senderCopyFactory(plaintext),
         sender_state: senderStateFactory
@@ -87,6 +91,7 @@ export async function decryptRatchetMessage({
     otherPublicKeyBase64,
     isOwnMessage,
     allowStateReset = true,
+    restoreSenderState = true,
     senderCopyDecryptor,
     senderStateDecryptor
 }) {
@@ -96,7 +101,7 @@ export async function decryptRatchetMessage({
         }
         const plaintext = senderCopyDecryptor(payload.sender_copy);
 
-        if (payload.sender_state && senderStateDecryptor) {
+        if (restoreSenderState && payload.sender_state && senderStateDecryptor) {
             const serializedState = senderStateDecryptor(payload.sender_state);
             const restoredSnapshot = JSON.parse(serializedState);
             const currentState = await getOrCreateState(
@@ -164,9 +169,13 @@ async function decryptWithState({
 
     const skippedKeyId = buildSkippedKeyId(header.dh, header.n);
     if (state.skippedKeys?.[skippedKeyId]) {
-        const messageKey = decodeBase64(state.skippedKeys[skippedKeyId]);
+        const messageKeyBundle = state.skippedKeys[skippedKeyId];
         delete state.skippedKeys[skippedKeyId];
-        const plaintext = decryptSecretBox(ratchetPayload, messageKey);
+        const plaintext = await decryptSecretBox(
+            ratchetPayload,
+            decodeBase64(messageKeyBundle.encryptionKey),
+            decodeBase64(messageKeyBundle.macKey)
+        );
         await saveRatchetState(chatId, state);
         return plaintext;
     }
@@ -186,7 +195,11 @@ async function decryptWithState({
     state.CKr = encodeBase64(chainStep.nextChainKey);
     state.Nr += 1;
 
-    const plaintext = decryptSecretBox(ratchetPayload, chainStep.messageKey);
+    const plaintext = await decryptSecretBox(
+        ratchetPayload,
+        chainStep.encryptionKey,
+        chainStep.macKey
+    );
     await saveRatchetState(chatId, state);
     return plaintext;
 }
@@ -201,7 +214,12 @@ async function getOrCreateState(
 ) {
     const existing = await getRatchetState(chatId);
     if (existing) {
-        return normalizeState(existing);
+        const normalizedExisting = normalizeState(existing);
+        if (normalizedExisting.stateVersion === RATCHET_STATE_VERSION) {
+            return normalizedExisting;
+        }
+
+        await deleteRatchetState(chatId);
     }
 
     const bootstrapState = await createInitialState({
@@ -213,6 +231,7 @@ async function getOrCreateState(
     });
 
     const state = normalizeState({
+        stateVersion: RATCHET_STATE_VERSION,
         ...bootstrapState
     });
 
@@ -413,7 +432,10 @@ async function skipMessageKeys(state, until) {
     while (state.Nr < until) {
         const chainStep = await kdfChain(decodeBase64(state.CKr));
         state.CKr = encodeBase64(chainStep.nextChainKey);
-        state.skippedKeys[buildSkippedKeyId(state.DHr, state.Nr)] = encodeBase64(chainStep.messageKey);
+        state.skippedKeys[buildSkippedKeyId(state.DHr, state.Nr)] = {
+            encryptionKey: encodeBase64(chainStep.encryptionKey),
+            macKey: encodeBase64(chainStep.macKey)
+        };
         state.Nr += 1;
 
         const skippedIds = Object.keys(state.skippedKeys);
@@ -425,10 +447,25 @@ async function skipMessageKeys(state, until) {
     return state;
 }
 
-function decryptSecretBox(ratchetPayload, messageKey) {
+async function decryptSecretBox(ratchetPayload, encryptionKey, macKey) {
     const nonce = decodeBase64(ratchetPayload.nonce);
     const ciphertext = decodeBase64(ratchetPayload.ciphertext);
-    const plaintext = nacl.secretbox.open(ciphertext, nonce, messageKey);
+
+    if (ratchetPayload.mac) {
+        const expectedMac = await buildMessageMac(
+            ratchetPayload.header,
+            nonce,
+            ciphertext,
+            macKey
+        );
+        const actualMac = decodeBase64(ratchetPayload.mac);
+
+        if (!constantTimeEqual(expectedMac, actualMac)) {
+            throw new Error("Message MAC verification failed");
+        }
+    }
+
+    const plaintext = nacl.secretbox.open(ciphertext, nonce, encryptionKey);
 
     if (!plaintext) {
         throw new Error("Ratchet decryption failed");
@@ -446,28 +483,38 @@ function shouldAttemptSessionReset(error, header) {
 }
 
 async function kdfRoot(rootKeyBytes, dhOutputBytes) {
-    const seed = await hmacSha256(rootKeyBytes, dhOutputBytes);
-    const rootKey = await hmacSha256(seed, naclUtil.decodeUTF8("root"));
-    const chainKey = await hmacSha256(seed, naclUtil.decodeUTF8("chain"));
+    const derived = await deriveLabeledSecrets({
+        saltBytes: rootKeyBytes,
+        inputKeyMaterialBytes: dhOutputBytes,
+        label: "double-ratchet-root",
+        lengthsByName: {
+            rootKey: 32,
+            chainKey: 32
+        }
+    });
+
+    const rootKey = derived.rootKey;
+    const chainKey = derived.chainKey;
     return { rootKey, chainKey };
 }
 
 async function kdfChain(chainKeyBytes) {
-    const nextChainKey = await hmacSha256(chainKeyBytes, naclUtil.decodeUTF8("chain"));
-    const messageKey = await hmacSha256(chainKeyBytes, naclUtil.decodeUTF8("message"));
-    return { nextChainKey, messageKey };
-}
+    const derived = await deriveLabeledSecrets({
+        saltBytes: chainKeyBytes,
+        inputKeyMaterialBytes: chainKeyBytes,
+        label: "double-ratchet-chain",
+        lengthsByName: {
+            nextChainKey: 32,
+            encryptionKey: 32,
+            macKey: 32
+        }
+    });
 
-async function hmacSha256(keyBytes, messageBytes) {
-    const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        keyBytes,
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign"]
-    );
-    const signature = await crypto.subtle.sign("HMAC", cryptoKey, messageBytes);
-    return new Uint8Array(signature);
+    return {
+        nextChainKey: derived.nextChainKey,
+        encryptionKey: derived.encryptionKey,
+        macKey: derived.macKey
+    };
 }
 
 async function sha256(bytes) {
@@ -488,6 +535,7 @@ function buildSkippedKeyId(dh, n) {
 
 function normalizeState(state) {
     return {
+        stateVersion: state.stateVersion || 1,
         RK: state.RK,
         DHs: state.DHs,
         DHr: state.DHr || null,
@@ -498,7 +546,7 @@ function normalizeState(state) {
         Nr: state.Nr || 0,
         PN: state.PN || 0,
         useIdentityForSending: state.useIdentityForSending !== false,
-        skippedKeys: state.skippedKeys || {},
+        skippedKeys: normalizeSkippedKeys(state.skippedKeys || {}),
         initialPrivateKey: state.initialPrivateKey || null,
         initialRemotePreKey: state.initialRemotePreKey || null,
         pendingX3dhHandshake: state.pendingX3dhHandshake || null
@@ -540,4 +588,47 @@ function encodeBase64(bytes) {
 
 function decodeBase64(value) {
     return naclUtil.decodeBase64(value.replace(/\s+/g, ""));
+}
+
+function normalizeSkippedKeys(skippedKeys) {
+    const normalized = {};
+
+    for (const [keyId, value] of Object.entries(skippedKeys)) {
+        if (typeof value === "string") {
+            normalized[keyId] = {
+                encryptionKey: value,
+                macKey: value
+            };
+            continue;
+        }
+
+        normalized[keyId] = {
+            encryptionKey: value?.encryptionKey || value?.messageKey || null,
+            macKey: value?.macKey || value?.encryptionKey || value?.messageKey || null
+        };
+    }
+
+    return normalized;
+}
+
+async function buildMessageMac(header, nonceBytes, ciphertextBytes, macKey) {
+    const aad = naclUtil.decodeUTF8(JSON.stringify(header));
+    const macInput = new Uint8Array(aad.length + nonceBytes.length + ciphertextBytes.length);
+    macInput.set(aad, 0);
+    macInput.set(nonceBytes, aad.length);
+    macInput.set(ciphertextBytes, aad.length + nonceBytes.length);
+    return hmacSha256(macKey, macInput);
+}
+
+function constantTimeEqual(left, right) {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    let diff = 0;
+    for (let i = 0; i < left.length; i += 1) {
+        diff |= left[i] ^ right[i];
+    }
+
+    return diff === 0;
 }

@@ -1,4 +1,5 @@
 import { nacl, naclUtil } from "./crypto.js";
+import { concatChunks, hkdf } from "./hkdf.js";
 
 export function verifySignedPreKey({ signingKeyBase64, signedPreKeyBase64, signatureBase64 }) {
     if (!signingKeyBase64 || !signedPreKeyBase64 || !signatureBase64) {
@@ -42,7 +43,7 @@ export async function deriveInitiatorX3dhSecret({
         );
     }
 
-    return sha256(concatUint8Arrays(parts));
+    return deriveX3dhRoot(parts);
 }
 
 export async function deriveResponderX3dhSecret({
@@ -75,12 +76,18 @@ export async function deriveResponderX3dhSecret({
         );
     }
 
-    return sha256(concatUint8Arrays(parts));
+    return deriveX3dhRoot(parts);
 }
 
-async function sha256(bytes) {
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    return naclUtil.encodeBase64(new Uint8Array(digest));
+async function deriveX3dhRoot(parts) {
+    const ikm = concatChunks(parts);
+    const derived = await hkdf(
+        naclUtil.decodeUTF8("x3dh-salt"),
+        ikm,
+        "x3dh:root",
+        32
+    );
+    return naclUtil.encodeBase64(derived);
 }
 
 function decodeBoxPublic(base64Value) {
@@ -89,17 +96,4 @@ function decodeBoxPublic(base64Value) {
 
 function decodeBoxSecret(base64Value) {
     return naclUtil.decodeBase64(base64Value.replace(/\s+/g, ""));
-}
-
-function concatUint8Arrays(chunks) {
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-        result.set(chunk, offset);
-        offset += chunk.length;
-    }
-
-    return result;
 }

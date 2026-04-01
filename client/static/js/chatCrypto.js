@@ -46,7 +46,8 @@ export async function decryptMessage({
     myPublicKeyBase64,
     otherPublicKeyBase64,
     isOwnMessage,
-    allowStateReset = true
+    allowStateReset = true,
+    restoreSenderState = true
 }) {
     if (payload?.version === 3) {
         return decryptRatchetMessage({
@@ -57,6 +58,7 @@ export async function decryptMessage({
             otherPublicKeyBase64,
             isOwnMessage,
             allowStateReset,
+            restoreSenderState,
             senderCopyDecryptor: (senderCopyPayload) => decryptLegacyPayload(senderCopyPayload, myPrivateKeyUint8),
             senderStateDecryptor: (senderStatePayload) => decryptLegacyPayload(senderStatePayload, myPrivateKeyUint8)
         });

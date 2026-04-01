@@ -204,7 +204,8 @@ async function processMessage(data) {
                 payload,
                 chatId,
                 isOwnMessage,
-                allowStateReset: !isHistorical
+                allowStateReset: !isHistorical,
+                restoreSenderState: isHistorical
             });
         } else {
             text = cachedText || data.content;
@@ -332,7 +333,14 @@ function rememberTranscriptMessage(data) {
     chatTranscript.sort((a, b) => (a.message_id || 0) - (b.message_id || 0));
 }
 
-async function decryptWithRecovery({ data, payload, chatId, isOwnMessage, allowStateReset }) {
+async function decryptWithRecovery({
+    data,
+    payload,
+    chatId,
+    isOwnMessage,
+    allowStateReset,
+    restoreSenderState
+}) {
     try {
         return await decryptMessage({
             chatId,
@@ -341,7 +349,8 @@ async function decryptWithRecovery({ data, payload, chatId, isOwnMessage, allowS
             myPublicKeyBase64: myPublicKeyCache,
             otherPublicKeyBase64: window.otherPublicKey,
             isOwnMessage,
-            allowStateReset
+            allowStateReset,
+            restoreSenderState
         });
     } catch (error) {
         if (isOwnMessage || !data.message_id) {
@@ -358,7 +367,8 @@ async function decryptWithRecovery({ data, payload, chatId, isOwnMessage, allowS
             myPublicKeyBase64: myPublicKeyCache,
             otherPublicKeyBase64: window.otherPublicKey,
             isOwnMessage,
-            allowStateReset: false
+            allowStateReset: false,
+            restoreSenderState
         });
     }
 }
@@ -385,7 +395,8 @@ async function rebuildRatchetStateFromTranscript(chatId, upToMessageId) {
                 myPublicKeyBase64: myPublicKeyCache,
                 otherPublicKeyBase64: window.otherPublicKey,
                 isOwnMessage,
-                allowStateReset: false
+                allowStateReset: false,
+                restoreSenderState: true
             });
         } catch (replayError) {
             console.warn("Replay step failed", item.message_id, replayError);
