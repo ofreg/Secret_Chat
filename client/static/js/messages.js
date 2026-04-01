@@ -1,10 +1,10 @@
 import {
     getCachedMessageText,
     deleteRatchetState,
+    deriveSafetyNumber,
     getLastSeenMessageId,
     getPrivateKeyUint8,
     getPublicKey,
-    fingerprint,
     getVerificationStatus,
     initKeysIfNeeded,
     saveVerificationStatus,
@@ -28,10 +28,29 @@ let deferredLiveMessages = [];
 let chatTranscript = [];
 let currentFingerprint = null;
 
+function bindChatHeaderControls() {
+    const toggle = document.getElementById("chatInfoToggle");
+    const close = document.getElementById("chatInfoClose");
+    const panel = document.getElementById("chatInfoPanel");
+
+    if (!toggle || !close || !panel) {
+        return;
+    }
+
+    toggle.onclick = function () {
+        panel.hidden = !panel.hidden;
+    };
+
+    close.onclick = function () {
+        panel.hidden = true;
+    };
+}
+
 window.addEventListener("load", async function () {
     await initKeysIfNeeded();
     myPrivateKeyCache = await getPrivateKeyUint8();
     myPublicKeyCache = await getPublicKey();
+    bindChatHeaderControls();
 
     const meRes = await fetch("/users/me");
     const meData = await meRes.json();
@@ -76,7 +95,7 @@ window.addEventListener("load", async function () {
     initUserSearch({
         onChatStarted: async (chatData) => {
             currentChatId = String(chatData.chat_id);
-            await applyChatKeys(chatData.public_key, chatData.identity_key, chatData.prekey_bundle);
+            await applyChatKeys(chatData.public_key, chatData.identity_key, chatData.prekey_bundle, chatData.username);
             openChatSocket(chatData.chat_id);
             await loadChats();
             window.location.search = "?chat_id=" + chatData.chat_id;
@@ -93,22 +112,28 @@ async function initializeChat(chatId) {
         return;
     }
 
-    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle);
+    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username);
     openChatSocket(chatId);
 }
 
-async function applyChatKeys(publicKey, identityKey, prekeyBundle = null) {
+async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "") {
     window.otherPublicKey = publicKey;
     window.otherIdentityKey = identityKey;
     window.otherPrekeyBundle = prekeyBundle;
     keysReady = true;
 
+    const chatUserNameEl = document.getElementById("chatUserName");
+    if (chatUserNameEl && username) {
+        chatUserNameEl.textContent = username;
+    }
+
     const verificationKey = window.otherIdentityKey || window.otherPublicKey;
-    const fp = await fingerprint(verificationKey);
+    const myIdentityKey = myPublicKeyCache;
+    const fp = await deriveSafetyNumber(myIdentityKey, verificationKey);
     currentFingerprint = fp;
     const el = document.getElementById("fingerprint");
     if (el) el.innerText = fp;
-    await updateVerificationUi(fp, verificationKey);
+    await updateVerificationUi(fp, verificationKey, myIdentityKey);
 }
 
 async function openChatSocket(chatId) {
@@ -419,7 +444,7 @@ function tryParsePayload(content) {
     }
 }
 
-async function updateVerificationUi(fp, verificationKey) {
+async function updateVerificationUi(fp, verificationKey, myIdentityKey) {
     const statusEl = document.getElementById("verificationStatus");
     const verifyBtn = document.getElementById("verifyFingerprintBtn");
     const resetBtn = document.getElementById("resetFingerprintBtn");
@@ -437,12 +462,12 @@ async function updateVerificationUi(fp, verificationKey) {
 
     verifyBtn.onclick = async function () {
         await saveVerificationStatus(fp, true);
-        await updateVerificationUi(fp, verificationKey);
+        await updateVerificationUi(fp, verificationKey, myIdentityKey);
     };
 
     resetBtn.onclick = async function () {
         await saveVerificationStatus(fp, false);
-        await updateVerificationUi(fp, verificationKey);
+        await updateVerificationUi(fp, verificationKey, myIdentityKey);
     };
 
     copyBtn.onclick = async function () {
@@ -455,8 +480,9 @@ async function updateVerificationUi(fp, verificationKey) {
     };
 
     const qrPayload = JSON.stringify({
-        type: "chat-fingerprint",
-        fingerprint: fp,
+        type: "chat-safety-number",
+        safety_number: fp,
+        my_identity_key: myIdentityKey,
         identity_key: verificationKey
     });
 

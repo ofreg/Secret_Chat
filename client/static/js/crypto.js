@@ -335,4 +335,26 @@ export async function fingerprint(base64Key) {
         .join(":");
 }
 
+export async function deriveSafetyNumber(firstBase64Key, secondBase64Key) {
+    if (!firstBase64Key || !secondBase64Key) {
+        return "";
+    }
+
+    const [leftKey, rightKey] = [firstBase64Key, secondBase64Key].sort();
+    const label = new TextEncoder().encode("e2ee-chat:safety-number:v1");
+    const leftBytes = Uint8Array.from(atob(leftKey), (c) => c.charCodeAt(0));
+    const rightBytes = Uint8Array.from(atob(rightKey), (c) => c.charCodeAt(0));
+
+    const merged = new Uint8Array(label.length + leftBytes.length + rightBytes.length);
+    merged.set(label, 0);
+    merged.set(leftBytes, label.length);
+    merged.set(rightBytes, label.length + leftBytes.length);
+
+    const hash = await crypto.subtle.digest("SHA-256", merged);
+
+    return Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(":");
+}
+
 export { nacl, naclUtil };

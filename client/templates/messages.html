@@ -23,6 +23,87 @@
     flex-direction: column;
 }
 
+.chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.chat-header-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.chat-menu-btn {
+    border: none;
+    background: #e2e8f0;
+    color: #0f172a;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 22px;
+    line-height: 1;
+}
+
+.chat-menu-btn:hover {
+    background: #cbd5e1;
+}
+
+.chat-layout {
+    display: flex;
+    gap: 12px;
+    min-height: 0;
+    flex: 1;
+}
+
+.chat-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.chat-info-panel {
+    width: 320px;
+    max-width: 40%;
+    border: 1px solid #d8dee9;
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 14px;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+.chat-info-panel[hidden] {
+    display: none;
+}
+
+.chat-info-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.chat-info-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.chat-info-close {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 20px;
+    color: #475569;
+}
+
 .messages {
     flex: 1;
     border: 1px solid #ccc;
@@ -46,7 +127,6 @@
     border: 1px solid #d8dee9;
     border-radius: 12px;
     padding: 12px;
-    margin: 12px 0;
     background: #f8fafc;
 }
 
@@ -127,6 +207,27 @@
     color: #475569;
     max-width: 280px;
 }
+
+@media (max-width: 980px) {
+    .container {
+        flex-direction: column;
+        height: auto;
+    }
+
+    .sidebar,
+    .chat-area {
+        width: 100%;
+    }
+
+    .chat-layout {
+        flex-direction: column;
+    }
+
+    .chat-info-panel {
+        width: 100%;
+        max-width: none;
+    }
+}
 </style>
 
 {% if other_public_key %}
@@ -153,7 +254,7 @@ window.otherIdentityKey = "{{ other_identity_key }}";
         </ul>
 
         {% if not chats %}
-            <p id="noChatsText">Чатів поки немає</p>
+        <p id="noChatsText">Чатів поки немає</p>
         {% endif %}
 
         <hr>
@@ -166,41 +267,55 @@ window.otherIdentityKey = "{{ other_identity_key }}";
     <div class="chat-area">
         {% if request.query_params.get("chat_id") %}
         <div class="chat-header">
-            <span class="status-dot offline" id="userStatus"></span>
-            <span id="chatUserName">Співрозмовник</span>
+            <div class="chat-header-main">
+                <span class="status-dot offline" id="userStatus"></span>
+                <span id="chatUserName">Співрозмовник</span>
+            </div>
+            <button class="chat-menu-btn" id="chatInfoToggle" type="button" aria-label="Відкрити інформацію про чат">⋮</button>
         </div>
 
-        <div class="safety-card">
-            <div class="safety-row">
+        <div class="chat-layout">
+            <div class="chat-main">
+                <div class="messages" id="chat"></div>
+
                 <div>
-                    <div class="safety-label">Safety Fingerprint</div>
-                    <div class="safety-fingerprint" id="fingerprint"></div>
-                </div>
-                <span class="verify-badge unverified" id="verificationStatus">Not verified</span>
-            </div>
-
-            <div class="safety-actions">
-                <button class="safety-btn primary" id="verifyFingerprintBtn" type="button">Verify</button>
-                <button class="safety-btn secondary" id="resetFingerprintBtn" type="button">Reset</button>
-                <button class="safety-btn secondary" id="copyFingerprintBtn" type="button">Copy</button>
-            </div>
-
-            <div class="qr-block">
-                <canvas id="fingerprintQr" width="128" height="128"></canvas>
-                <div class="qr-hint">
-                    Scan or compare this QR / fingerprint with your contact on another trusted channel to reduce MITM risk.
+                    <input id="messageInput" placeholder="Повідомлення">
+                    <button onclick="sendMessage()">Надіслати</button>
                 </div>
             </div>
-        </div>
 
-        <div class="messages" id="chat"></div>
+            <aside class="chat-info-panel" id="chatInfoPanel" hidden>
+                <div class="chat-info-header">
+                    <div class="chat-info-title">Інформація про чат</div>
+                    <button class="chat-info-close" id="chatInfoClose" type="button" aria-label="Закрити панель">×</button>
+                </div>
 
-        <div>
-            <input id="messageInput" placeholder="Повідомлення">
-            <button onclick="sendMessage()">Надіслати</button>
+                <div class="safety-card">
+                    <div class="safety-row">
+                        <div>
+                            <div class="safety-label">Safety Fingerprint</div>
+                            <div class="safety-fingerprint" id="fingerprint"></div>
+                        </div>
+                        <span class="verify-badge unverified" id="verificationStatus">Not verified</span>
+                    </div>
+
+                    <div class="safety-actions">
+                        <button class="safety-btn primary" id="verifyFingerprintBtn" type="button">Verify</button>
+                        <button class="safety-btn secondary" id="resetFingerprintBtn" type="button">Reset</button>
+                        <button class="safety-btn secondary" id="copyFingerprintBtn" type="button">Copy</button>
+                    </div>
+
+                    <div class="qr-block">
+                        <canvas id="fingerprintQr" width="128" height="128"></canvas>
+                        <div class="qr-hint">
+                            Scan or compare this QR / fingerprint with your contact on another trusted channel to reduce MITM risk.
+                        </div>
+                    </div>
+                </div>
+            </aside>
         </div>
         {% else %}
-            <p>Оберіть чат або знайдіть користувача</p>
+        <p>Оберіть чат або знайдіть користувача</p>
         {% endif %}
     </div>
 </div>
