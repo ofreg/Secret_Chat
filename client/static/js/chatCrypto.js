@@ -1,5 +1,5 @@
-import { nacl, naclUtil } from "./crypto.js?v=20260401a";
-import { decryptRatchetMessage, encryptRatchetMessage } from "./doubleRatchet.js?v=20260401a";
+import { nacl, naclUtil } from "./crypto.js?v=20260406b";
+import { decryptRatchetMessage, encryptRatchetMessage } from "./doubleRatchet.js?v=20260406b";
 
 export async function encryptMessage({
     chatId,
@@ -47,7 +47,8 @@ export async function decryptMessage({
     otherPublicKeyBase64,
     isOwnMessage,
     allowStateReset = true,
-    restoreSenderState = true
+    restoreSenderState = true,
+    restoreSenderRootKey = false
 }) {
     if (payload?.version === 3) {
         return decryptRatchetMessage({
@@ -59,6 +60,7 @@ export async function decryptMessage({
             isOwnMessage,
             allowStateReset,
             restoreSenderState,
+            restoreSenderRootKey,
             senderCopyDecryptor: (senderCopyPayload) => decryptLegacyPayload(senderCopyPayload, myPrivateKeyUint8),
             senderStateDecryptor: (senderStatePayload) => decryptLegacyPayload(senderStatePayload, myPrivateKeyUint8)
         });

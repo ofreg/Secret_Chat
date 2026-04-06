@@ -10,9 +10,9 @@ import {
     saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260401a";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260401a";
-import { initUserSearch } from "./userSearch.js?v=20260401a";
+} from "./crypto.js?v=20260406b";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260406b";
+import { initUserSearch } from "./userSearch.js?v=20260406b";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
@@ -237,7 +237,8 @@ async function processMessage(data) {
                 chatId,
                 isOwnMessage,
                 allowStateReset: !isHistorical,
-                restoreSenderState: isHistorical
+                restoreSenderState: isHistorical,
+                restoreSenderRootKey: false
             });
         } else {
             text = cachedText || data.content;
@@ -382,7 +383,8 @@ async function decryptWithRecovery({
             otherPublicKeyBase64: window.otherPublicKey,
             isOwnMessage,
             allowStateReset,
-            restoreSenderState
+            restoreSenderState,
+            restoreSenderRootKey: false
         });
     } catch (error) {
         if (isOwnMessage || !data.message_id) {
@@ -397,11 +399,12 @@ async function decryptWithRecovery({
             payload,
             myPrivateKeyUint8: myPrivateKeyCache,
             myPublicKeyBase64: myPublicKeyCache,
-            otherPublicKeyBase64: window.otherPublicKey,
-            isOwnMessage,
-            allowStateReset: false,
-            restoreSenderState
-        });
+                otherPublicKeyBase64: window.otherPublicKey,
+                isOwnMessage,
+                allowStateReset: false,
+                restoreSenderState,
+                restoreSenderRootKey: true
+            });
     }
 }
 

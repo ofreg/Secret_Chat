@@ -6,16 +6,16 @@ import {
     nacl,
     naclUtil,
     saveRatchetState
-} from "./crypto.js?v=20260401a";
+} from "./crypto.js?v=20260406b";
 import {
     deriveInitiatorX3dhSecret,
     deriveResponderX3dhSecret,
     verifySignedPreKey
-} from "./x3dh.js?v=20260401a";
-import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260401a";
+} from "./x3dh.js?v=20260406b";
+import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260406b";
 
 const MAX_SKIPPED_KEYS = 64;
-const RATCHET_STATE_VERSION = 2;
+const RATCHET_STATE_VERSION = 3;
 
 export async function encryptRatchetMessage({
     chatId,
@@ -92,6 +92,7 @@ export async function decryptRatchetMessage({
     isOwnMessage,
     allowStateReset = true,
     restoreSenderState = true,
+    restoreSenderRootKey = false,
     senderCopyDecryptor,
     senderStateDecryptor
 }) {
@@ -111,7 +112,10 @@ export async function decryptRatchetMessage({
                 otherPublicKeyBase64
             );
 
-            await saveRatchetState(chatId, mergeOwnStateSnapshot(currentState, restoredSnapshot));
+            await saveRatchetState(
+                chatId,
+                mergeOwnStateSnapshot(currentState, restoredSnapshot, { restoreRootKey: restoreSenderRootKey })
+            );
         }
 
         return plaintext;
@@ -565,10 +569,10 @@ function extractOwnStateSnapshot(state) {
     };
 }
 
-function mergeOwnStateSnapshot(currentState, snapshot) {
+function mergeOwnStateSnapshot(currentState, snapshot, { restoreRootKey = false } = {}) {
     return normalizeState({
         ...currentState,
-        RK: snapshot.RK || currentState.RK,
+        RK: restoreRootKey ? (snapshot.RK || currentState.RK) : currentState.RK,
         DHs: snapshot.DHs || currentState.DHs,
         CKs: snapshot.CKs || null,
         Ns: snapshot.Ns || 0,
