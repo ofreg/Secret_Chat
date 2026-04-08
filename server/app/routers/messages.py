@@ -4,7 +4,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, or_, and_
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, AsyncSessionLocal
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.db.models import Chat, Message, OneTimePreKey, User
 from app.dependencies.auth import get_current_user
@@ -14,6 +14,7 @@ import os
 from sqlalchemy.ext.asyncio import AsyncSession
 router = APIRouter()
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
+USED_PREKEY_RETENTION_DAYS = 7
 
 
 # ---------------- PAGE ----------------
@@ -318,6 +319,8 @@ def users_me(current_user: User = Depends(get_current_user)):
 
 
 async def issue_prekey_bundle(user_id: int, db: AsyncSession):
+    await purge_old_used_prekeys(user_id, db)
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
@@ -355,6 +358,8 @@ async def issue_prekey_bundle(user_id: int, db: AsyncSession):
 
 
 async def peek_prekey_bundle(user_id: int, db: AsyncSession):
+    await purge_old_used_prekeys(user_id, db)
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
@@ -383,3 +388,15 @@ async def peek_prekey_bundle(user_id: int, db: AsyncSession):
             "public_key": one_time_prekey.public_key
         } if one_time_prekey else None
     }
+
+
+async def purge_old_used_prekeys(user_id: int, db: AsyncSession):
+    cutoff = datetime.utcnow() - timedelta(days=USED_PREKEY_RETENTION_DAYS)
+    await db.execute(
+        OneTimePreKey.__table__.delete().where(
+            OneTimePreKey.user_id == user_id,
+            OneTimePreKey.used_at.is_not(None),
+            OneTimePreKey.used_at < cutoff
+        )
+    )
+    await db.commit()

@@ -5,6 +5,10 @@ import { openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
 const SIGNED_PREKEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000;
+const USED_PREKEY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const LOCAL_RATCHET_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const LOCAL_MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const VERIFICATION_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 
 async function idbOpen() {
     return openDB("e2ee_chat", 4, {
@@ -80,12 +84,18 @@ export async function getPublicKey() {
 
 export async function saveRatchetState(chatId, state) {
     const db = await idbOpen();
-    await db.put("ratchets", state, String(chatId));
+    await db.put("ratchets", { ...state, _savedAt: Date.now() }, String(chatId));
 }
 
 export async function getRatchetState(chatId) {
     const db = await idbOpen();
-    return db.get("ratchets", String(chatId));
+    const data = await db.get("ratchets", String(chatId));
+    if (!data) return null;
+    if (typeof data === "object") {
+        const { _savedAt, ...state } = data;
+        return state;
+    }
+    return data;
 }
 
 export async function deleteRatchetState(chatId) {
@@ -95,27 +105,35 @@ export async function deleteRatchetState(chatId) {
 
 export async function saveCachedMessageText(chatId, messageId, text) {
     const db = await idbOpen();
-    await db.put("messages", text, `msg:${chatId}:${messageId}`);
+    await db.put("messages", { text, updatedAt: Date.now() }, `msg:${chatId}:${messageId}`);
 }
 
 export async function getCachedMessageText(chatId, messageId) {
     const db = await idbOpen();
-    return db.get("messages", `msg:${chatId}:${messageId}`);
+    const record = await db.get("messages", `msg:${chatId}:${messageId}`);
+    if (typeof record === "string") {
+        return record;
+    }
+    return record?.text || null;
 }
 
 export async function saveLastSeenMessageId(chatId, messageId) {
     const db = await idbOpen();
-    await db.put("messages", messageId, `meta:lastSeen:${chatId}`);
+    await db.put("messages", { messageId, updatedAt: Date.now() }, `meta:lastSeen:${chatId}`);
 }
 
 export async function getLastSeenMessageId(chatId) {
     const db = await idbOpen();
-    return (await db.get("messages", `meta:lastSeen:${chatId}`)) || 0;
+    const record = await db.get("messages", `meta:lastSeen:${chatId}`);
+    if (typeof record === "number") {
+        return record;
+    }
+    return record?.messageId || 0;
 }
 
 export async function saveVerificationStatus(fingerprintValue, isVerified) {
     const db = await idbOpen();
-    await db.put("messages", { isVerified }, `verify:${fingerprintValue}`);
+    await db.put("messages", { isVerified, updatedAt: Date.now() }, `verify:${fingerprintValue}`);
 }
 
 export async function getVerificationStatus(fingerprintValue) {
@@ -207,6 +225,11 @@ export async function initKeysIfNeeded() {
         oneTimePreKeys = [...oneTimePreKeys, ...replenished];
         await db.put("keys", oneTimePreKeys, "one_time_prekeys");
     }
+
+    const cleanupResult = await cleanupLocalKeyMaterial(db, signedPreKey);
+    signedPreKey = cleanupResult.signedPreKey;
+    oneTimePreKeys = cleanupResult.oneTimePreKeys;
+    await cleanupLocalState(db);
 
     console.log("Syncing public key with server");
 
@@ -355,6 +378,83 @@ export async function deriveSafetyNumber(firstBase64Key, secondBase64Key) {
     return Array.from(new Uint8Array(hash))
         .map((b) => b.toString(16).padStart(2, "0"))
         .join(":");
+}
+
+async function cleanupLocalKeyMaterial(db, signedPreKey) {
+    const oneTimePreKeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
+    const now = Date.now();
+    const signedPreKeyCreatedAt = Date.parse(
+        signedPreKey?.created_at ?? signedPreKey?.createdAt ?? new Date().toISOString()
+    );
+
+    const filteredPreKeys = oneTimePreKeys.filter((prekey) => {
+        if (!prekey.is_used) {
+            return true;
+        }
+
+        const usedAt = Date.parse(prekey.used_at || "");
+        if (!Number.isFinite(usedAt)) {
+            return false;
+        }
+
+        return now - usedAt <= USED_PREKEY_RETENTION_MS;
+    });
+
+    let nextOneTimePreKeys = filteredPreKeys;
+    if (filteredPreKeys.length !== oneTimePreKeys.length) {
+        await db.put("keys", filteredPreKeys, "one_time_prekeys");
+    }
+
+    let nextSignedPreKey = signedPreKey;
+
+    if (Number.isFinite(signedPreKeyCreatedAt) && now - signedPreKeyCreatedAt > SIGNED_PREKEY_ROTATION_MS * 2) {
+        const rotatedSignedPreKey = createSignedPreKey(await db.get("keys", "signing"));
+        await db.put("keys", rotatedSignedPreKey, "signed_prekey");
+        nextSignedPreKey = rotatedSignedPreKey;
+    }
+
+    return {
+        signedPreKey: nextSignedPreKey,
+        oneTimePreKeys: nextOneTimePreKeys
+    };
+}
+
+async function cleanupLocalState(db) {
+    const now = Date.now();
+
+    await cleanupStoreEntries(db, "ratchets", (key, value) => {
+        const savedAt = Number(value?._savedAt || 0);
+        return Number.isFinite(savedAt) && now - savedAt > LOCAL_RATCHET_RETENTION_MS;
+    });
+
+    await cleanupStoreEntries(db, "messages", (key, value) => {
+        const stringKey = String(key);
+        const updatedAt = typeof value === "object" && value ? Number(value.updatedAt || 0) : 0;
+
+        if (stringKey.startsWith("verify:")) {
+            return Number.isFinite(updatedAt) && updatedAt > 0 && now - updatedAt > VERIFICATION_RETENTION_MS;
+        }
+
+        if (stringKey.startsWith("msg:") || stringKey.startsWith("meta:lastSeen:")) {
+            return Number.isFinite(updatedAt) && updatedAt > 0 && now - updatedAt > LOCAL_MESSAGE_RETENTION_MS;
+        }
+
+        return false;
+    });
+}
+
+async function cleanupStoreEntries(db, storeName, shouldDelete) {
+    const tx = db.transaction(storeName, "readwrite");
+    let cursor = await tx.store.openCursor();
+
+    while (cursor) {
+        if (shouldDelete(cursor.key, cursor.value)) {
+            await cursor.delete();
+        }
+        cursor = await cursor.continue();
+    }
+
+    await tx.done;
 }
 
 export { nacl, naclUtil };
