@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Request, Form, Cookie, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
@@ -316,7 +316,16 @@ def refresh_token_route(
 
     new_access_token = create_access_token({"sub": user_email})
 
-    response = RedirectResponse("/profile", status_code=303)
+    wants_json = (
+        request.headers.get("x-requested-with") == "fetch" or
+        "application/json" in request.headers.get("accept", "")
+    )
+
+    response = (
+        JSONResponse({"status": "ok"})
+        if wants_json
+        else RedirectResponse("/profile", status_code=303)
+    )
 
     response.set_cookie(
         "access_token",

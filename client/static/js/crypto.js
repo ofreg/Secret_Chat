@@ -1,14 +1,17 @@
 import nacl from "https://cdn.jsdelivr.net/npm/tweetnacl/+esm";
 import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
-import { openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
+import { deleteDB, openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
+import { authFetch } from "./authClient.js";
 
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
+const ENCRYPTED_VERSION = 2;
 const SIGNED_PREKEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000;
 const USED_PREKEY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCAL_RATCHET_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LOCAL_MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const VERIFICATION_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
+let unlockedProtectorKey = null;
 
 async function idbOpen() {
     return openDB("e2ee_chat", 4, {
@@ -63,12 +66,12 @@ function buildPreKeyId() {
 
 export async function saveIdentityKey(keys) {
     const db = await idbOpen();
-    await db.put("keys", keys, "identity");
+    await db.put("keys", await encryptIdentityRecord(keys, db), "identity");
 }
 
 export async function getPrivateKeyUint8() {
     const db = await idbOpen();
-    const data = await db.get("keys", "identity");
+    const data = await readIdentityRecord(db);
 
     if (!data) return null;
 
@@ -144,7 +147,7 @@ export async function getVerificationStatus(fingerprintValue) {
 
 export async function getSigningPublicKey() {
     const db = await idbOpen();
-    const data = await db.get("keys", "signing");
+    const data = await readSigningRecord(db);
     return data?.publicKey || null;
 }
 
@@ -156,13 +159,12 @@ export async function getSignedPreKeyPublic() {
 
 export async function getSignedPreKey() {
     const db = await idbOpen();
-    const data = await db.get("keys", "signed_prekey");
-    return data ? normalizeSignedPreKey(data) : null;
+    return readSignedPreKeyRecord(db);
 }
 
 export async function consumeLocalOneTimePreKey(keyId) {
     const db = await idbOpen();
-    const oneTimePreKeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
+    const oneTimePreKeys = await readOneTimePreKeysRecord(db);
     const keyIndex = oneTimePreKeys.findIndex((prekey) => prekey.key_id === Number(keyId));
     if (keyIndex === -1) {
         return null;
@@ -174,7 +176,7 @@ export async function consumeLocalOneTimePreKey(keyId) {
             is_used: true,
             used_at: new Date().toISOString()
         };
-        await db.put("keys", oneTimePreKeys, "one_time_prekeys");
+        await db.put("keys", await encryptOneTimePreKeysRecord(oneTimePreKeys, db), "one_time_prekeys");
     }
 
     return oneTimePreKeys[keyIndex];
@@ -183,39 +185,39 @@ export async function consumeLocalOneTimePreKey(keyId) {
 export async function getX3dhState() {
     const db = await idbOpen();
     return {
-        identity: await db.get("keys", "identity"),
-        signing: await db.get("keys", "signing"),
-        signedPreKey: normalizeSignedPreKey(await db.get("keys", "signed_prekey")),
-        oneTimePreKeys: normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || [])
+        identity: await readIdentityRecord(db),
+        signing: await readSigningRecord(db),
+        signedPreKey: await readSignedPreKeyRecord(db),
+        oneTimePreKeys: await readOneTimePreKeysRecord(db)
     };
 }
 
 export async function initKeysIfNeeded() {
     const db = await idbOpen();
-    let identity = await db.get("keys", "identity");
-    let signing = await db.get("keys", "signing");
-    let signedPreKey = await db.get("keys", "signed_prekey");
-    let oneTimePreKeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
+    let identity = await readIdentityRecord(db);
+    let signing = await readSigningRecord(db);
+    let signedPreKey = await readSignedPreKeyRecord(db);
+    let oneTimePreKeys = await readOneTimePreKeysRecord(db);
 
     if (!identity) {
         console.log("Generating new identity encryption keys");
         identity = await generateIdentityKeys();
-        await db.put("keys", identity, "identity");
+        await db.put("keys", await encryptIdentityRecord(identity, db), "identity");
     }
 
     if (!signing) {
         console.log("Generating new identity signing keys");
         signing = await generateSigningKeys();
-        await db.put("keys", signing, "signing");
+        await db.put("keys", await encryptSigningRecord(signing, db), "signing");
     }
 
     if (!signedPreKey || shouldRotateSignedPreKey(signedPreKey)) {
         console.log("Generating signed prekey");
         signedPreKey = createSignedPreKey(signing);
-        await db.put("keys", signedPreKey, "signed_prekey");
+        await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
     } else {
         signedPreKey = normalizeSignedPreKey(signedPreKey);
-        await db.put("keys", signedPreKey, "signed_prekey");
+        await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
     }
 
     const availablePreKeys = oneTimePreKeys.filter((prekey) => !prekey.is_used);
@@ -223,7 +225,7 @@ export async function initKeysIfNeeded() {
         const missingCount = PREKEY_BATCH_SIZE - availablePreKeys.length;
         const replenished = Array.from({ length: missingCount }, () => generatePreKeyPair());
         oneTimePreKeys = [...oneTimePreKeys, ...replenished];
-        await db.put("keys", oneTimePreKeys, "one_time_prekeys");
+        await db.put("keys", await encryptOneTimePreKeysRecord(oneTimePreKeys, db), "one_time_prekeys");
     }
 
     const cleanupResult = await cleanupLocalKeyMaterial(db, signedPreKey);
@@ -234,9 +236,8 @@ export async function initKeysIfNeeded() {
     console.log("Syncing public key with server");
 
     try {
-        const legacyResponse = await fetch("/users/keys", {
+        const legacyResponse = await authFetch("/users/keys", {
             method: "POST",
-            credentials: "include",
             headers: {
                 "Content-Type": "application/json"
             },
@@ -247,9 +248,8 @@ export async function initKeysIfNeeded() {
 
         console.log("Legacy key sync:", await legacyResponse.json());
 
-        const x3dhResponse = await fetch("/users/x3dh-keys", {
+        const x3dhResponse = await authFetch("/users/x3dh-keys", {
             method: "POST",
-            credentials: "include",
             headers: {
                 "Content-Type": "application/json"
             },
@@ -312,11 +312,13 @@ function normalizeOneTimePreKeys(prekeys) {
             key_id: normalizePreKeyId(prekey?.key_id ?? prekey?.keyId ?? null),
             public_key: prekey?.public_key ?? prekey?.publicKey ?? null,
             private_key: prekey?.private_key ?? prekey?.privateKey ?? null,
+            private_key_enc: prekey?.private_key_enc ?? prekey?.privateKeyEnc ?? null,
             created_at: prekey?.created_at ?? prekey?.createdAt ?? null,
             is_used: Boolean(prekey?.is_used ?? prekey?.isUsed ?? false),
-            used_at: prekey?.used_at ?? prekey?.usedAt ?? null
+            used_at: prekey?.used_at ?? prekey?.usedAt ?? null,
+            encryptedVersion: prekey?.encryptedVersion ?? prekey?.encrypted_version ?? null
         }))
-        .filter((prekey) => prekey.key_id && prekey.public_key && prekey.private_key);
+        .filter((prekey) => prekey.key_id && prekey.public_key && (prekey.private_key || prekey.private_key_enc));
 }
 
 function normalizeSignedPreKey(prekey) {
@@ -325,7 +327,9 @@ function normalizeSignedPreKey(prekey) {
         key_id: normalizePreKeyId(prekey?.key_id ?? prekey?.keyId ?? null),
         public_key: prekey?.public_key ?? prekey?.publicKey ?? null,
         private_key: prekey?.private_key ?? prekey?.privateKey ?? null,
-        created_at: prekey?.created_at ?? prekey?.createdAt ?? new Date().toISOString()
+        private_key_enc: prekey?.private_key_enc ?? prekey?.privateKeyEnc ?? null,
+        created_at: prekey?.created_at ?? prekey?.createdAt ?? new Date().toISOString(),
+        encryptedVersion: prekey?.encryptedVersion ?? prekey?.encrypted_version ?? null
     };
 }
 
@@ -402,14 +406,14 @@ async function cleanupLocalKeyMaterial(db, signedPreKey) {
 
     let nextOneTimePreKeys = filteredPreKeys;
     if (filteredPreKeys.length !== oneTimePreKeys.length) {
-        await db.put("keys", filteredPreKeys, "one_time_prekeys");
+        await db.put("keys", await encryptOneTimePreKeysRecord(filteredPreKeys, db), "one_time_prekeys");
     }
 
     let nextSignedPreKey = signedPreKey;
 
     if (Number.isFinite(signedPreKeyCreatedAt) && now - signedPreKeyCreatedAt > SIGNED_PREKEY_ROTATION_MS * 2) {
-        const rotatedSignedPreKey = createSignedPreKey(await db.get("keys", "signing"));
-        await db.put("keys", rotatedSignedPreKey, "signed_prekey");
+        const rotatedSignedPreKey = createSignedPreKey(await readSigningRecord(db));
+        await db.put("keys", await encryptSignedPreKeyRecord(rotatedSignedPreKey, db), "signed_prekey");
         nextSignedPreKey = rotatedSignedPreKey;
     }
 
@@ -457,4 +461,221 @@ async function cleanupStoreEntries(db, storeName, shouldDelete) {
     await tx.done;
 }
 
+export async function resetLocalCryptoState() {
+    unlockedProtectorKey = null;
+    await deleteDB("e2ee_chat");
+}
+
 export { nacl, naclUtil };
+
+async function readIdentityRecord(db) {
+    const record = await db.get("keys", "identity");
+    if (!record) {
+        return null;
+    }
+
+    const privateKey = await decryptPrivateValue(record.privateKeyEnc, record.privateKey, db);
+    const normalized = {
+        publicKey: record.publicKey,
+        privateKey
+    };
+    await db.put("keys", await encryptIdentityRecord(normalized, db), "identity");
+    return normalized;
+}
+
+async function readSigningRecord(db) {
+    const record = await db.get("keys", "signing");
+    if (!record) {
+        return null;
+    }
+
+    const privateKey = await decryptPrivateValue(record.privateKeyEnc, record.privateKey, db);
+    const normalized = {
+        publicKey: record.publicKey,
+        privateKey
+    };
+    await db.put("keys", await encryptSigningRecord(normalized, db), "signing");
+    return normalized;
+}
+
+async function readSignedPreKeyRecord(db) {
+    const record = await db.get("keys", "signed_prekey");
+    if (!record) {
+        return null;
+    }
+
+    const normalizedRecord = normalizeSignedPreKey(record);
+    const privateKey = await decryptPrivateValue(
+        normalizedRecord.private_key_enc,
+        normalizedRecord.private_key,
+        db
+    );
+    const normalized = {
+        ...normalizedRecord,
+        private_key: privateKey
+    };
+    await db.put("keys", await encryptSignedPreKeyRecord(normalized, db), "signed_prekey");
+    return normalized;
+}
+
+async function readOneTimePreKeysRecord(db) {
+    const rawPrekeys = normalizeOneTimePreKeys((await db.get("keys", "one_time_prekeys")) || []);
+    if (!rawPrekeys.length) {
+        return [];
+    }
+
+    let needsMigration = false;
+    const decrypted = [];
+
+    for (const prekey of rawPrekeys) {
+        const privateKey = await decryptPrivateValue(prekey.private_key_enc, prekey.private_key, db);
+        if (prekey.private_key || !prekey.private_key_enc || prekey.encryptedVersion !== ENCRYPTED_VERSION) {
+            needsMigration = true;
+        }
+        decrypted.push({
+            ...prekey,
+            private_key: privateKey,
+            private_key_enc: prekey.private_key_enc || null,
+            encryptedVersion: ENCRYPTED_VERSION
+        });
+    }
+
+    if (needsMigration) {
+        await db.put("keys", await encryptOneTimePreKeysRecord(decrypted, db), "one_time_prekeys");
+    }
+
+    return decrypted;
+}
+
+async function encryptIdentityRecord(identity, db) {
+    return {
+        publicKey: identity.publicKey,
+        privateKeyEnc: await encryptPrivateValue(identity.privateKey, db),
+        encryptedVersion: ENCRYPTED_VERSION
+    };
+}
+
+async function encryptSigningRecord(signing, db) {
+    return {
+        publicKey: signing.publicKey,
+        privateKeyEnc: await encryptPrivateValue(signing.privateKey, db),
+        encryptedVersion: ENCRYPTED_VERSION
+    };
+}
+
+async function encryptSignedPreKeyRecord(prekey, db) {
+    const normalized = normalizeSignedPreKey(prekey);
+    return {
+        key_id: normalized.key_id,
+        public_key: normalized.public_key,
+        private_key_enc: await encryptPrivateValue(normalized.private_key, db),
+        created_at: normalized.created_at,
+        is_used: Boolean(normalized.is_used),
+        used_at: normalized.used_at ?? null,
+        signature: normalized.signature,
+        encryptedVersion: ENCRYPTED_VERSION
+    };
+}
+
+async function encryptOneTimePreKeysRecord(prekeys, db) {
+    const normalizedPrekeys = normalizeOneTimePreKeys(prekeys);
+    const encrypted = [];
+
+    for (const prekey of normalizedPrekeys) {
+        encrypted.push({
+            key_id: prekey.key_id,
+            public_key: prekey.public_key,
+            private_key_enc: await encryptPrivateValue(prekey.private_key, db),
+            created_at: prekey.created_at,
+            is_used: Boolean(prekey.is_used),
+            used_at: prekey.used_at ?? null,
+            encryptedVersion: ENCRYPTED_VERSION
+        });
+    }
+
+    return encrypted;
+}
+
+async function decryptPrivateValue(encryptedValue, plaintextValue, db) {
+    if (plaintextValue) {
+        return plaintextValue;
+    }
+
+    if (!encryptedValue?.ciphertext || !encryptedValue?.iv) {
+        return null;
+    }
+
+    const protectorKey = await getLocalProtectorKey(db);
+    const decrypted = await crypto.subtle.decrypt(
+        {
+            name: "AES-GCM",
+            iv: decodeBase64ToBytes(encryptedValue.iv)
+        },
+        protectorKey,
+        decodeBase64ToBytes(encryptedValue.ciphertext)
+    );
+
+    return new TextDecoder().decode(new Uint8Array(decrypted));
+}
+
+async function encryptPrivateValue(plaintextValue, db) {
+    if (!plaintextValue) {
+        return null;
+    }
+
+    const protectorKey = await getLocalProtectorKey(db);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+        {
+            name: "AES-GCM",
+            iv
+        },
+        protectorKey,
+        new TextEncoder().encode(plaintextValue)
+    );
+
+    return {
+        iv: encodeBytesToBase64(iv),
+        ciphertext: encodeBytesToBase64(new Uint8Array(ciphertext))
+    };
+}
+
+async function getLocalProtectorKey(db) {
+    if (unlockedProtectorKey) {
+        return unlockedProtectorKey;
+    }
+
+    const storedProtector = await db.get("keys", "local_protector");
+    if (storedProtector?.key instanceof CryptoKey) {
+        unlockedProtectorKey = storedProtector.key;
+        return unlockedProtectorKey;
+    }
+
+    unlockedProtectorKey = await crypto.subtle.generateKey(
+        {
+            name: "AES-GCM",
+            length: 256
+        },
+        false,
+        ["encrypt", "decrypt"]
+    );
+
+    await db.put(
+        "keys",
+        {
+            version: ENCRYPTED_VERSION,
+            key: unlockedProtectorKey
+        },
+        "local_protector"
+    );
+
+    return unlockedProtectorKey;
+}
+
+function decodeBase64ToBytes(value) {
+    return naclUtil.decodeBase64(String(value || "").replace(/\s+/g, ""));
+}
+
+function encodeBytesToBase64(value) {
+    return naclUtil.encodeBase64(value);
+}

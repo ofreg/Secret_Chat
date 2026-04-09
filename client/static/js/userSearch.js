@@ -1,3 +1,5 @@
+import { authFetch } from "./authClient.js";
+
 export function initUserSearch({ onChatStarted }) {
     const searchInput = document.getElementById("searchInput");
     const searchResults = document.getElementById("searchResults");
@@ -10,7 +12,7 @@ export function initUserSearch({ onChatStarted }) {
                 return;
             }
 
-            const response = await fetch(`/messages/search?query=${query}`);
+            const response = await authFetch(`/messages/search?query=${encodeURIComponent(query)}`);
             const users = await response.json();
 
             searchResults.innerHTML = "";
@@ -34,7 +36,7 @@ export function initUserSearch({ onChatStarted }) {
         const formData = new FormData();
         formData.append("username", username);
 
-        const response = await fetch("/messages/start", {
+        const response = await authFetch("/messages/start", {
             method: "POST",
             body: formData
         });

@@ -7,12 +7,14 @@ import {
     getPublicKey,
     getVerificationStatus,
     initKeysIfNeeded,
+    resetLocalCryptoState,
     saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260406b";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260406b";
-import { initUserSearch } from "./userSearch.js?v=20260406b";
+} from "./crypto.js?v=20260409a";
+import { authFetch, ensureSession } from "./authClient.js";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260409a";
+import { initUserSearch } from "./userSearch.js?v=20260409a";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
@@ -47,12 +49,19 @@ function bindChatHeaderControls() {
 }
 
 window.addEventListener("load", async function () {
+    const sessionOk = await ensureSession();
+    if (!sessionOk) {
+        window.location.href = "/login";
+        return;
+    }
+
     await initKeysIfNeeded();
     myPrivateKeyCache = await getPrivateKeyUint8();
     myPublicKeyCache = await getPublicKey();
     bindChatHeaderControls();
+    connectUserSocket();
 
-    const meRes = await fetch("/users/me");
+    const meRes = await authFetch("/users/me");
     const meData = await meRes.json();
     if (meData.status === "ok") {
         myUsername = meData.username || "";
@@ -105,7 +114,7 @@ window.addEventListener("load", async function () {
 
 async function initializeChat(chatId) {
     currentChatId = String(chatId);
-    const res = await fetch(`/messages/get_keys?chat_id=${chatId}`);
+    const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
     const data = await res.json();
 
     if (data.status !== "ok" || !data.public_key) {
@@ -274,31 +283,35 @@ function getSenderLabel(senderName) {
     return senderName === myUsername ? "You" : senderName;
 }
 
-const userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
+let userSocket = null;
 const messageSound = new Audio("/static/sounds/new_message.mp3");
 
-userSocket.onmessage = async function (event) {
-    const data = JSON.parse(event.data);
+function connectUserSocket() {
+    userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
 
-    if (data.type === "new_chat") {
-        await loadChats();
-    }
+    userSocket.onmessage = async function (event) {
+        const data = JSON.parse(event.data);
 
-    if (data.type === "new_message") {
-        const updatedChatId = data.chat_id;
-        if (!window.location.search.includes("chat_id=" + updatedChatId)) {
-            markChatAsUpdated(updatedChatId);
-            messageSound.play();
+        if (data.type === "new_chat") {
+            await loadChats();
         }
-    }
-};
 
-userSocket.onclose = function (event) {
-    console.log("User WS closed", event);
-};
+        if (data.type === "new_message") {
+            const updatedChatId = data.chat_id;
+            if (!window.location.search.includes("chat_id=" + updatedChatId)) {
+                markChatAsUpdated(updatedChatId);
+                void messageSound.play();
+            }
+        }
+    };
+
+    userSocket.onclose = function (event) {
+        console.log("User WS closed", event);
+    };
+}
 
 async function loadChats() {
-    const response = await fetch("/messages");
+    const response = await authFetch("/messages");
     const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
@@ -480,6 +493,18 @@ async function updateVerificationUi(fp, verificationKey, myIdentityKey) {
         } catch {
             alert(fp);
         }
+    };
+
+    const resetDbBtn = document.getElementById("resetIndexedDbBtn");
+    if (!resetDbBtn) {
+        return;
+    }
+    resetDbBtn.onclick = async function () {
+        const confirmed = window.confirm("Скинути весь локальний crypto-state та IndexedDB для цього чату?");
+        if (!confirmed) return;
+
+        await resetLocalCryptoState();
+        window.location.reload();
     };
 
     const qrPayload = JSON.stringify({
