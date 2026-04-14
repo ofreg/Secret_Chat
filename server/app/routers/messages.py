@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from app.db.models import Chat, Message, OneTimePreKey, User
 from app.dependencies.auth import get_current_user
+from app.routers.auth import ensure_account_instance_id
 from app.utils.jwt import decode_access_token
 from app.utils.time import utc_now
 from app.utils.websocket_manager import manager
@@ -316,7 +317,22 @@ async def get_prekey_bundle(username: str, current_user: User = Depends(get_curr
 
 @router.get("/users/me")
 def users_me(current_user: User = Depends(get_current_user)):
-    return {"status": "ok", "username": current_user.username, "id": current_user.id}
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            return {"status": "error", "message": "User not found"}
+
+        account_instance_id = ensure_account_instance_id(user, db)
+        return {
+            "status": "ok",
+            "username": user.username,
+            "id": user.id,
+            "email": user.email,
+            "account_instance_id": account_instance_id
+        }
+    finally:
+        db.close()
 
 
 async def issue_prekey_bundle(user_id: int, db: AsyncSession):

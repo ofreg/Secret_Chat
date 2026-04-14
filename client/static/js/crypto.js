@@ -1,7 +1,7 @@
 import nacl from "https://cdn.jsdelivr.net/npm/tweetnacl/+esm";
 import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
 import { deleteDB, openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
-import { authFetch } from "./authClient.js";
+import { authFetch } from "./authClient.js?v=20260414a";
 
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
@@ -468,6 +468,31 @@ export async function resetLocalCryptoState() {
 
 export { nacl, naclUtil };
 
+export async function ensureLocalAccountBinding(accountData) {
+    const binding = buildAccountBinding(accountData);
+    if (!binding) {
+        return false;
+    }
+
+    let db = await idbOpen();
+    const existing = await db.get("keys", "account_binding");
+
+    if (existing?.binding && existing.binding !== binding) {
+        await resetLocalCryptoState();
+        db = await idbOpen();
+    }
+
+    await db.put("keys", {
+        binding,
+        email: accountData.email || "",
+        userId: accountData.id ?? null,
+        accountInstanceId: accountData.account_instance_id || "",
+        updatedAt: Date.now()
+    }, "account_binding");
+
+    return existing?.binding ? existing.binding !== binding : false;
+}
+
 async function readIdentityRecord(db) {
     const record = await db.get("keys", "identity");
     if (!record) {
@@ -678,4 +703,15 @@ function decodeBase64ToBytes(value) {
 
 function encodeBytesToBase64(value) {
     return naclUtil.encodeBase64(value);
+}
+
+function buildAccountBinding(accountData) {
+    const email = String(accountData?.email || "").trim().toLowerCase();
+    const accountInstanceId = String(accountData?.account_instance_id || "").trim();
+
+    if (!email || !accountInstanceId) {
+        return null;
+    }
+
+    return `${email}:${accountInstanceId}`;
 }

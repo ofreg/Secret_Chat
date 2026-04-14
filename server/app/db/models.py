@@ -1,4 +1,5 @@
 from datetime import datetime
+import uuid
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -15,6 +16,11 @@ class User(Base):
     password: Mapped[str] = mapped_column(String)
 
     username: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    account_instance_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
     public_key: Mapped[str] = mapped_column(Text, nullable=True)
     identity_key: Mapped[str] = mapped_column(Text, nullable=True)
     signing_key: Mapped[str] = mapped_column(Text, nullable=True)

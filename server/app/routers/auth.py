@@ -43,6 +43,19 @@ templates = Jinja2Templates(
 REFRESH_TOKEN_EXPIRE_DAYS = int(
     os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7)
 )
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def ensure_account_instance_id(user: User, db: Session) -> str:
+    if user.account_instance_id:
+        return user.account_instance_id
+
+    user.account_instance_id = uuid.uuid4().hex
+    db.commit()
+    db.refresh(user)
+    return user.account_instance_id
+
+
 class OneTimePreKeySchema(BaseModel):
     key_id: int
     public_key: str
@@ -186,6 +199,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
             )
 
         # 🔐 Access token
+        ensure_account_instance_id(user, db)
         access_token = create_access_token({"sub": user.email})
 
         # 🔄 Refresh token
@@ -218,7 +232,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         "access_token",
         access_token,
         httponly=True,
-        secure=False,
+        secure=COOKIE_SECURE,
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
@@ -227,7 +241,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         "refresh_token",
         refresh_token,
         httponly=True,
-        secure=False,
+        secure=COOKIE_SECURE,
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
@@ -293,6 +307,7 @@ def refresh_token_route(
             )
 
         # 🔁 ROTATION
+        ensure_account_instance_id(user, db)
         user_email = user.email
         db.delete(token_record)
 
@@ -332,7 +347,7 @@ def refresh_token_route(
         "access_token",
         new_access_token,
         httponly=True,
-        secure=False,
+        secure=COOKIE_SECURE,
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
@@ -341,7 +356,7 @@ def refresh_token_route(
         "refresh_token",
         new_refresh_token,
         httponly=True,
-        secure=False,
+        secure=COOKIE_SECURE,
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )

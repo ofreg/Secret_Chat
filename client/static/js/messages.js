@@ -1,4 +1,5 @@
 import {
+    ensureLocalAccountBinding,
     getCachedMessageText,
     deleteRatchetState,
     deriveSafetyNumber,
@@ -11,10 +12,10 @@ import {
     saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260409a";
-import { authFetch, ensureSession } from "./authClient.js";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260409a";
-import { initUserSearch } from "./userSearch.js?v=20260409a";
+} from "./crypto.js?v=20260414a";
+import { authFetch, ensureSession } from "./authClient.js?v=20260414a";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260414a";
+import { initUserSearch } from "./userSearch.js?v=20260414a";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
@@ -55,17 +56,18 @@ window.addEventListener("load", async function () {
         return;
     }
 
+    const meRes = await authFetch("/users/me");
+    const meData = await meRes.json();
+    if (meData.status === "ok") {
+        myUsername = meData.username || "";
+        await ensureLocalAccountBinding(meData);
+    }
+
     await initKeysIfNeeded();
     myPrivateKeyCache = await getPrivateKeyUint8();
     myPublicKeyCache = await getPublicKey();
     bindChatHeaderControls();
     connectUserSocket();
-
-    const meRes = await authFetch("/users/me");
-    const meData = await meRes.json();
-    if (meData.status === "ok") {
-        myUsername = meData.username || "";
-    }
 
     const params = new URLSearchParams(window.location.search);
     const chatId = params.get("chat_id");
@@ -166,7 +168,7 @@ async function openChatSocket(chatId) {
         } catch {}
     }
 
-    const chatSocket = new WebSocket(`ws://${window.location.host}/ws/${chatId}`);
+    const chatSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/${chatId}`);
 
     chatSocket.onopen = function () {
         console.log("Chat ready:", chatId);
@@ -287,7 +289,7 @@ let userSocket = null;
 const messageSound = new Audio("/static/sounds/new_message.mp3");
 
 function connectUserSocket() {
-    userSocket = new WebSocket(`ws://${window.location.host}/ws/user`);
+    userSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/user`);
 
     userSocket.onmessage = async function (event) {
         const data = JSON.parse(event.data);
@@ -347,6 +349,10 @@ function setUserStatus(isOnline) {
         statusDot.classList.remove("online");
         statusDot.classList.add("offline");
     }
+}
+
+function getWebSocketProtocol() {
+    return window.location.protocol === "https:" ? "wss" : "ws";
 }
 
 function getCurrentChatId() {

@@ -30,6 +30,7 @@ app.mount(
 # ---------------------- DB ----------------------
 Base.metadata.create_all(bind=engine)
 ensure_schema_sql = [
+    ("users", "account_instance_id", "ALTER TABLE users ADD COLUMN account_instance_id TEXT"),
     ("users", "signing_key", "ALTER TABLE users ADD COLUMN signing_key TEXT"),
     ("users", "signed_prekey", "ALTER TABLE users ADD COLUMN signed_prekey TEXT"),
     ("users", "signed_prekey_signature", "ALTER TABLE users ADD COLUMN signed_prekey_signature TEXT"),
