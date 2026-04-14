@@ -357,6 +357,43 @@ textarea {
     margin-top: 18px;
 }
 
+.profile-avatar-preview {
+    margin-bottom: 18px;
+    display: flex;
+    justify-content: center;
+}
+
+.profile-avatar-image,
+.profile-avatar-fallback {
+    width: 112px;
+    height: 112px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    font-size: 34px;
+    font-weight: 800;
+    color: #fff;
+    box-shadow: 0 14px 30px rgba(21, 50, 71, 0.18);
+}
+
+.profile-avatar-image {
+    object-fit: cover;
+}
+
+.avatar-gradient-1 { background: linear-gradient(135deg, #4f46e5, #7c3aed); }
+.avatar-gradient-2 { background: linear-gradient(135deg, #0f766e, #14b8a6); }
+.avatar-gradient-3 { background: linear-gradient(135deg, #0284c7, #38bdf8); }
+.avatar-gradient-4 { background: linear-gradient(135deg, #b45309, #f59e0b); }
+.avatar-gradient-5 { background: linear-gradient(135deg, #be123c, #fb7185); }
+.avatar-gradient-6 { background: linear-gradient(135deg, #7c2d12, #ea580c); }
+.avatar-gradient-7 { background: linear-gradient(135deg, #4338ca, #22c55e); }
+.avatar-gradient-8 { background: linear-gradient(135deg, #1d4ed8, #06b6d4); }
+.avatar-gradient-9 { background: linear-gradient(135deg, #6d28d9, #ec4899); }
+.avatar-gradient-10 { background: linear-gradient(135deg, #166534, #84cc16); }
+.avatar-gradient-11 { background: linear-gradient(135deg, #9f1239, #f97316); }
+.avatar-gradient-12 { background: linear-gradient(135deg, #334155, #64748b); }
+
 .page-note {
     padding: 14px 16px;
     border-radius: 14px;

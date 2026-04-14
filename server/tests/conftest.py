@@ -15,6 +15,8 @@ os.environ.setdefault("DATABASE_URL_SYNC", f"sqlite:///{TEST_DB_PATH.as_posix()}
 os.environ.setdefault("DATABASE_URL_ASYNC", f"sqlite+aiosqlite:///{TEST_DB_PATH.as_posix()}")
 os.environ.setdefault("JWT_SECRET_KEY", "12345678901234567890123456789012")
 os.environ.setdefault("COOKIE_SECURE", "false")
+os.environ.setdefault("AVATAR_UPLOAD_DIR", str(CLIENT_ROOT / "static" / "uploads" / "avatars"))
+os.environ.setdefault("MAX_AVATAR_SIZE_BYTES", str(2 * 1024 * 1024))
 os.environ.setdefault("TEMPLATES_DIR", str(CLIENT_ROOT / "templates"))
 os.environ.setdefault("STATIC_DIR", str(CLIENT_ROOT / "static"))
 

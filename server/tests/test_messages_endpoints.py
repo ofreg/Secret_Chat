@@ -26,7 +26,11 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
 
     response = client.get("/messages/search", params={"query": "user2"})
     assert response.status_code == 200
-    assert response.json() == [{"id": 2, "username": "user2"}]
+    assert response.json()[0]["id"] == 2
+    assert response.json()[0]["username"] == "user2"
+    assert response.json()[0]["avatar_url"] is None
+    assert response.json()[0]["avatar_class"].startswith("avatar-gradient-")
+    assert response.json()[0]["avatar_initial"] == "U"
 
     response = client.post("/messages/start", data={"username": "user2"})
     assert response.status_code == 200
@@ -35,6 +39,9 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert payload["chat_id"] == 1
     assert payload["public_key"] == "public-key-user2"
     assert payload["username"] == "user2"
+    assert payload["avatar_url"] is None
+    assert payload["avatar_class"].startswith("avatar-gradient-")
+    assert payload["avatar_initial"] == "U"
     assert payload["prekey_bundle"] == {
         "identity_key": "identity-user2",
         "signing_key": "signing-user2",
@@ -63,6 +70,9 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert payload["status"] == "ok"
     assert payload["public_key"] == "public-key-user2"
     assert payload["username"] == "user2"
+    assert payload["avatar_url"] is None
+    assert payload["avatar_class"].startswith("avatar-gradient-")
+    assert payload["avatar_initial"] == "U"
     assert payload["prekey_bundle"] == {
         "identity_key": "identity-user2",
         "signing_key": "signing-user2",

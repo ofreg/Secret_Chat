@@ -21,6 +21,7 @@ class User(Base):
         nullable=False,
         default=lambda: uuid.uuid4().hex,
     )
+    avatar_filename: Mapped[str] = mapped_column(String, nullable=True)
     public_key: Mapped[str] = mapped_column(Text, nullable=True)
     identity_key: Mapped[str] = mapped_column(Text, nullable=True)
     signing_key: Mapped[str] = mapped_column(Text, nullable=True)

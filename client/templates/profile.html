@@ -3,14 +3,63 @@
 {% block title %}Профіль{% endblock %}
 
 {% block content %}
+<div class="page-shell">
+    <section class="profile-card">
+        <div class="profile-grid">
+            <div>
+                <h2 class="card-title">Профіль</h2>
+                <p class="card-copy">Оновіть своє ім'я та фото. Якщо фото немає, у чатах буде показаний градієнтний аватар.</p>
 
-<h2>Профіль</h2>
+                {% if error %}
+                    <p class="error-text">{{ error }}</p>
+                {% endif %}
 
-<p><strong>Email:</strong> {{ email }}</p>
+                <form method="post" enctype="multipart/form-data" class="form-stack">
+                    <label class="form-label">
+                        Ім'я
+                        <input class="text-input" name="name" value="{{ name }}">
+                    </label>
 
-{% if error %}
-    <p style="color:red;">{{ error }}</p>
-{% endif %}
+                    <label class="form-label">
+                        Фото профілю
+                        <input class="text-input" type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif">
+                    </label>
+
+                    <div class="helper-row">
+                        <button type="submit" class="primary-btn">Зберегти</button>
+                    </div>
+                </form>
+            </div>
+
+            <aside class="panel-card">
+                <div class="profile-avatar-preview">
+                    {% if avatar_url %}
+                    <img class="profile-avatar-image" src="{{ avatar_url }}" alt="{{ name }}">
+                    {% else %}
+                    <div class="profile-avatar-fallback {{ avatar_class }}">{{ avatar_initial }}</div>
+                    {% endif %}
+                </div>
+
+                <div class="profile-facts">
+                    <div class="fact-row">
+                        <span class="fact-label">Email</span>
+                        <span class="fact-value">{{ email }}</span>
+                    </div>
+                    <div class="fact-row">
+                        <span class="fact-label">Ім'я</span>
+                        <span class="fact-value">{{ name }}</span>
+                    </div>
+                </div>
+
+                <div class="panel-actions">
+                    <form method="post" action="/logout">
+                        <button type="submit" class="danger-btn">Вийти</button>
+                    </form>
+                </div>
+            </aside>
+        </div>
+    </section>
+</div>
 
 {% if init_keys %}
 <script type="module">
@@ -27,17 +76,4 @@ window.addEventListener("load", async () => {
 });
 </script>
 {% endif %}
-
-<form method="post">
-    <label>Ім'я:</label>
-    <input name="name" value="{{ name }}">
-    <button type="submit">Зберегти</button>
-</form>
-
-<br>
-
-<form method="post" action="/logout">
-    <button type="submit">Вийти</button>
-</form>
-
 {% endblock %}

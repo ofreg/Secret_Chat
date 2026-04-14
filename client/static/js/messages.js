@@ -106,7 +106,7 @@ window.addEventListener("load", async function () {
     initUserSearch({
         onChatStarted: async (chatData) => {
             currentChatId = String(chatData.chat_id);
-            await applyChatKeys(chatData.public_key, chatData.identity_key, chatData.prekey_bundle, chatData.username);
+            await applyChatKeys(chatData.public_key, chatData.identity_key, chatData.prekey_bundle, chatData.username, chatData);
             openChatSocket(chatData.chat_id);
             await loadChats();
             window.location.search = "?chat_id=" + chatData.chat_id;
@@ -123,11 +123,11 @@ async function initializeChat(chatId) {
         return;
     }
 
-    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username);
+    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
     openChatSocket(chatId);
 }
 
-async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "") {
+async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "", avatarData = null) {
     window.otherPublicKey = publicKey;
     window.otherIdentityKey = identityKey;
     window.otherPrekeyBundle = prekeyBundle;
@@ -137,6 +137,8 @@ async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, userna
     if (chatUserNameEl && username) {
         chatUserNameEl.textContent = username;
     }
+
+    updateChatHeaderAvatar(avatarData);
 
     const verificationKey = window.otherIdentityKey || window.otherPublicKey;
     const myIdentityKey = myPublicKeyCache;
@@ -353,6 +355,30 @@ function setUserStatus(isOnline) {
 
 function getWebSocketProtocol() {
     return window.location.protocol === "https:" ? "wss" : "ws";
+}
+
+function updateChatHeaderAvatar(avatarData) {
+    const avatarRoot = document.getElementById("chatUserAvatar");
+    if (!avatarRoot) return;
+
+    avatarRoot.innerHTML = "";
+
+    if (avatarData?.avatar_url) {
+        const image = document.createElement("img");
+        image.src = avatarData.avatar_url;
+        image.alt = "Avatar";
+        image.className = "chat-user-avatar-image";
+        avatarRoot.appendChild(image);
+        return;
+    }
+
+    const fallback = document.createElement("div");
+    fallback.className = "chat-user-avatar-fallback";
+    fallback.textContent = avatarData?.avatar_initial || "?";
+    if (avatarData?.avatar_class) {
+        fallback.classList.add(avatarData.avatar_class);
+    }
+    avatarRoot.appendChild(fallback);
 }
 
 function getCurrentChatId() {
