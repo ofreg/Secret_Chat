@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request, Form, Cookie, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime, timedelta
+from datetime import timedelta
 from app.db.session import SessionLocal
 from app.db.models import OneTimePreKey, RefreshToken, User
 import os
@@ -32,6 +32,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi import Request, Depends
 from pydantic import BaseModel, Field
 from typing import List
+from app.utils.time import utc_now
 email_adapter = TypeAdapter(EmailStr)
 
 router = APIRouter()
@@ -190,7 +191,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         # 🔄 Refresh token
         refresh_token = create_refresh_token()
         hashed_refresh = hash_refresh_token(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(
+        expires_at = utc_now() + timedelta(
             days=REFRESH_TOKEN_EXPIRE_DAYS
         )
 
@@ -257,7 +258,7 @@ def refresh_token_route(
             RefreshToken.token == hashed_refresh
         ).first()
 
-        if not token_record or token_record.expires_at < datetime.utcnow():
+        if not token_record or token_record.expires_at < utc_now():
             raise HTTPException(
                 status_code=401,
                 detail="Недійсний refresh токен"
@@ -301,7 +302,7 @@ def refresh_token_route(
         new_refresh_record = RefreshToken(
             token=new_hashed_refresh,
             user_id=user.id,
-            expires_at=datetime.utcnow() + timedelta(
+            expires_at=utc_now() + timedelta(
                 days=REFRESH_TOKEN_EXPIRE_DAYS
             ),
             user_agent=user_agent,

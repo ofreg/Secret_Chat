@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from app.db.models import Chat, Message, OneTimePreKey, User
 from app.dependencies.auth import get_current_user
 from app.utils.jwt import decode_access_token
+from app.utils.time import utc_now
 from app.utils.websocket_manager import manager
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -340,7 +341,7 @@ async def issue_prekey_bundle(user_id: int, db: AsyncSession):
 
     one_time_payload = None
     if one_time_prekey:
-        one_time_prekey.used_at = datetime.utcnow()
+        one_time_prekey.used_at = utc_now()
         await db.commit()
         one_time_payload = {
             "key_id": one_time_prekey.key_id,
@@ -391,7 +392,7 @@ async def peek_prekey_bundle(user_id: int, db: AsyncSession):
 
 
 async def purge_old_used_prekeys(user_id: int, db: AsyncSession):
-    cutoff = datetime.utcnow() - timedelta(days=USED_PREKEY_RETENTION_DAYS)
+    cutoff = utc_now() - timedelta(days=USED_PREKEY_RETENTION_DAYS)
     await db.execute(
         OneTimePreKey.__table__.delete().where(
             OneTimePreKey.user_id == user_id,

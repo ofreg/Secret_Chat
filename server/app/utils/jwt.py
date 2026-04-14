@@ -1,8 +1,9 @@
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from jose import JWTError, jwt
 import secrets
 import hashlib
+from app.utils.time import utc_now
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -22,7 +23,7 @@ def create_access_token(data: dict):
     Створює JWT access token з полем 'sub' і 'type' = 'access'
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = utc_now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({
         "exp": expire,
         "type": "access"

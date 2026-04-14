@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstr
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+from app.utils.time import utc_now
 
 
 class User(Base):
@@ -45,7 +46,7 @@ class Chat(Base):
     user1: Mapped["User"] = relationship("User", foreign_keys=[user1_id])
     user2: Mapped["User"] = relationship("User", foreign_keys=[user2_id])
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     __table_args__ = (
         UniqueConstraint("user1_id", "user2_id"),
@@ -62,7 +63,7 @@ class Message(Base):
 
     content: Mapped[str] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class OneTimePreKey(Base):
@@ -72,7 +73,7 @@ class OneTimePreKey(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     key_id: Mapped[int] = mapped_column(Integer, nullable=False)
     public_key: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship("User")
