@@ -278,7 +278,10 @@ async function processMessage(data) {
 
 function renderMessage(chat, senderLabel, text) {
     const div = document.createElement("div");
-    div.innerHTML = `<b>${senderLabel}:</b> ${text}`;
+    const sender = document.createElement("b");
+    sender.textContent = `${senderLabel}:`;
+    div.appendChild(sender);
+    div.appendChild(document.createTextNode(` ${text}`));
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
 }
