@@ -39,6 +39,12 @@ window.sendMessage = async function () {
     const chatId = getCurrentChatId();
     const input = document.getElementById("messageInput");
     if (!input || !window.chatSocket || !myPublicKeyCache || !keysReady) {
+        console.warn("Send blocked:", {
+            hasInput: Boolean(input),
+            hasChatSocket: Boolean(window.chatSocket),
+            hasMyPublicKey: Boolean(myPublicKeyCache),
+            keysReady
+        });
         return;
     }
 
@@ -107,12 +113,14 @@ window.addEventListener("load", async function () {
 
     const meRes = await authFetch("/users/me");
     const meData = await meRes.json();
-    let accountBindingPromise = Promise.resolve(false);
     if (meData.status === "ok") {
         myUsername = meData.username || "";
-        accountBindingPromise = ensureLocalAccountBinding(meData).catch((error) => {
+        void ensureLocalAccountBinding(meData).then((bindingChanged) => {
+            if (bindingChanged) {
+                window.location.reload();
+            }
+        }).catch((error) => {
             console.warn("Local account binding failed:", error);
-            return false;
         });
     }
 
@@ -120,12 +128,6 @@ window.addEventListener("load", async function () {
     connectUserSocket();
 
     cryptoBootstrapPromise = (async () => {
-        const bindingChanged = await accountBindingPromise;
-        if (bindingChanged) {
-            window.location.reload();
-            return;
-        }
-
         await initKeysIfNeeded();
         myPrivateKeyCache = await getPrivateKeyUint8();
         myPublicKeyCache = await getPublicKey();
