@@ -323,7 +323,8 @@ window.otherIdentityKey = "{{ other_identity_key }}";
 </script>
 {% endif %}
 
-<script type="module" src="/static/js/messages.js?v=20260414a"></script>
+<script type="module" src="/static/js/searchBootstrap.js?v=20260416d"></script>
+<script type="module" src="/static/js/messages.js?v=20260416f"></script>
 
 <div class="container">
     <div class="sidebar">
@@ -380,7 +381,7 @@ window.otherIdentityKey = "{{ other_identity_key }}";
 
                 <div>
                     <input id="messageInput" placeholder="Повідомлення">
-                    <button onclick="sendMessage()">Надіслати</button>
+                    <button onclick="window.sendMessage()">Надіслати</button>
                 </div>
             </div>
 

@@ -15,7 +15,6 @@ import {
 } from "./crypto.js?v=20260414a";
 import { authFetch, ensureSession } from "./authClient.js?v=20260414a";
 import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260414a";
-import { initUserSearch } from "./userSearch.js?v=20260414a";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
@@ -30,6 +29,46 @@ let historySyncInProgress = false;
 let deferredLiveMessages = [];
 let chatTranscript = [];
 let currentFingerprint = null;
+let cryptoBootstrapPromise = null;
+
+window.sendMessage = async function () {
+    if (cryptoBootstrapPromise) {
+        await cryptoBootstrapPromise;
+    }
+
+    const chatId = getCurrentChatId();
+    const input = document.getElementById("messageInput");
+    if (!input || !window.chatSocket || !myPublicKeyCache || !keysReady) {
+        return;
+    }
+
+    if (!window.otherPublicKey) {
+        const refreshed = await refreshChatKeys(chatId);
+        if (!refreshed) {
+            console.warn("Recipient keys are not available yet");
+            return;
+        }
+    }
+
+    try {
+        const messageText = input.value.trim();
+        if (!messageText) return;
+
+        const payload = await encryptMessage({
+            chatId,
+            message: messageText,
+            recipientPublicBase64: window.otherPublicKey,
+            recipientPrekeyBundle: window.otherPrekeyBundle,
+            senderPublicBase64: myPublicKeyCache,
+            myPrivateKeyUint8: myPrivateKeyCache
+        });
+
+        window.chatSocket.send(JSON.stringify(payload));
+        input.value = "";
+    } catch (err) {
+        console.error("Encryption error:", err);
+    }
+};
 
 function bindChatHeaderControls() {
     const toggle = document.getElementById("chatInfoToggle");
@@ -50,6 +89,16 @@ function bindChatHeaderControls() {
 }
 
 window.addEventListener("load", async function () {
+    const messageInput = document.getElementById("messageInput");
+    if (messageInput) {
+        messageInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void window.sendMessage();
+            }
+        });
+    }
+
     const sessionOk = await ensureSession();
     if (!sessionOk) {
         window.location.href = "/login";
@@ -58,16 +107,33 @@ window.addEventListener("load", async function () {
 
     const meRes = await authFetch("/users/me");
     const meData = await meRes.json();
+    let accountBindingPromise = Promise.resolve(false);
     if (meData.status === "ok") {
         myUsername = meData.username || "";
-        await ensureLocalAccountBinding(meData);
+        accountBindingPromise = ensureLocalAccountBinding(meData).catch((error) => {
+            console.warn("Local account binding failed:", error);
+            return false;
+        });
     }
 
-    await initKeysIfNeeded();
-    myPrivateKeyCache = await getPrivateKeyUint8();
-    myPublicKeyCache = await getPublicKey();
     bindChatHeaderControls();
     connectUserSocket();
+
+    cryptoBootstrapPromise = (async () => {
+        const bindingChanged = await accountBindingPromise;
+        if (bindingChanged) {
+            window.location.reload();
+            return;
+        }
+
+        await initKeysIfNeeded();
+        myPrivateKeyCache = await getPrivateKeyUint8();
+        myPublicKeyCache = await getPublicKey();
+
+        if (window.otherPublicKey || window.otherIdentityKey) {
+            await refreshSafetyNumber();
+        }
+    })();
 
     const params = new URLSearchParams(window.location.search);
     const chatId = params.get("chat_id");
@@ -76,42 +142,6 @@ window.addEventListener("load", async function () {
     if (chatId) {
         await initializeChat(chatId);
     }
-
-    window.sendMessage = async function () {
-        const input = document.getElementById("messageInput");
-        if (!input || !window.chatSocket || !window.otherPublicKey || !myPublicKeyCache || !keysReady) {
-            return;
-        }
-
-        try {
-            const messageText = input.value.trim();
-            if (!messageText) return;
-
-            const payload = await encryptMessage({
-                chatId: getCurrentChatId(),
-                message: messageText,
-                recipientPublicBase64: window.otherPublicKey,
-                recipientPrekeyBundle: window.otherPrekeyBundle,
-                senderPublicBase64: myPublicKeyCache,
-                myPrivateKeyUint8: myPrivateKeyCache
-            });
-
-            window.chatSocket.send(JSON.stringify(payload));
-            input.value = "";
-        } catch (err) {
-            console.error("Encryption error:", err);
-        }
-    };
-
-    initUserSearch({
-        onChatStarted: async (chatData) => {
-            currentChatId = String(chatData.chat_id);
-            await applyChatKeys(chatData.public_key, chatData.identity_key, chatData.prekey_bundle, chatData.username, chatData);
-            openChatSocket(chatData.chat_id);
-            await loadChats();
-            window.location.search = "?chat_id=" + chatData.chat_id;
-        }
-    });
 });
 
 async function initializeChat(chatId) {
@@ -119,7 +149,7 @@ async function initializeChat(chatId) {
     const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
     const data = await res.json();
 
-    if (data.status !== "ok" || !data.public_key) {
+    if (data.status !== "ok") {
         return;
     }
 
@@ -128,9 +158,9 @@ async function initializeChat(chatId) {
 }
 
 async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "", avatarData = null) {
-    window.otherPublicKey = publicKey;
-    window.otherIdentityKey = identityKey;
-    window.otherPrekeyBundle = prekeyBundle;
+    window.otherPublicKey = publicKey || null;
+    window.otherIdentityKey = identityKey || null;
+    window.otherPrekeyBundle = prekeyBundle || null;
     keysReady = true;
 
     const chatUserNameEl = document.getElementById("chatUserName");
@@ -139,9 +169,31 @@ async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, userna
     }
 
     updateChatHeaderAvatar(avatarData);
+    await refreshSafetyNumber();
+}
 
+async function refreshChatKeys(chatId) {
+    if (!chatId) {
+        return false;
+    }
+
+    const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
+    const data = await res.json();
+    if (data.status !== "ok" || !data.public_key) {
+        return false;
+    }
+
+    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
+    return true;
+}
+
+async function refreshSafetyNumber() {
     const verificationKey = window.otherIdentityKey || window.otherPublicKey;
     const myIdentityKey = myPublicKeyCache;
+    if (!verificationKey || !myIdentityKey) {
+        return;
+    }
+
     const fp = await deriveSafetyNumber(myIdentityKey, verificationKey);
     currentFingerprint = fp;
     const el = document.getElementById("fingerprint");

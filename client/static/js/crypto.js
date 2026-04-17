@@ -107,17 +107,15 @@ export async function deleteRatchetState(chatId) {
 }
 
 export async function saveCachedMessageText(chatId, messageId, text) {
-    const db = await idbOpen();
-    await db.put("messages", { text, updatedAt: Date.now() }, `msg:${chatId}:${messageId}`);
+    void chatId;
+    void messageId;
+    void text;
 }
 
 export async function getCachedMessageText(chatId, messageId) {
-    const db = await idbOpen();
-    const record = await db.get("messages", `msg:${chatId}:${messageId}`);
-    if (typeof record === "string") {
-        return record;
-    }
-    return record?.text || null;
+    void chatId;
+    void messageId;
+    return null;
 }
 
 export async function saveLastSeenMessageId(chatId, messageId) {
@@ -482,6 +480,8 @@ export async function ensureLocalAccountBinding(accountData) {
         db = await idbOpen();
     }
 
+    await clearStoredPlaintextMessages(db);
+
     await db.put("keys", {
         binding,
         email: accountData.email || "",
@@ -491,6 +491,20 @@ export async function ensureLocalAccountBinding(accountData) {
     }, "account_binding");
 
     return existing?.binding ? existing.binding !== binding : false;
+}
+
+async function clearStoredPlaintextMessages(db) {
+    const tx = db.transaction("messages", "readwrite");
+    let cursor = await tx.store.openCursor();
+
+    while (cursor) {
+        if (String(cursor.key).startsWith("msg:")) {
+            await cursor.delete();
+        }
+        cursor = await cursor.continue();
+    }
+
+    await tx.done;
 }
 
 async function readIdentityRecord(db) {
