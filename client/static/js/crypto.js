@@ -1,7 +1,7 @@
 import nacl from "https://cdn.jsdelivr.net/npm/tweetnacl/+esm";
 import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
 import { deleteDB, openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
-import { authFetch } from "./authClient.js?v=20260414a";
+import { authFetch } from "./authClient.js?v=20260416t";
 
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
@@ -12,10 +12,15 @@ const LOCAL_RATCHET_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LOCAL_MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const VERIFICATION_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 let unlockedProtectorKey = null;
+const IDB_OPEN_TIMEOUT_MS = 3000;
+let dbOpenPromise = null;
+let dbConnection = null;
+let idbRecoveryAttempted = false;
 
-async function idbOpen() {
-    return openDB("e2ee_chat", 4, {
+function createIdbOpenPromise() {
+    const openPromise = openDB("e2ee_chat", 4, {
         upgrade(db) {
+            console.log("[crypto-debug] idbOpen: upgrade triggered");
             if (!db.objectStoreNames.contains("keys")) {
                 db.createObjectStore("keys");
             }
@@ -25,8 +30,78 @@ async function idbOpen() {
             if (!db.objectStoreNames.contains("messages")) {
                 db.createObjectStore("messages");
             }
+        },
+        blocked() {
+            console.warn("[crypto-debug] idbOpen: blocked by another open tab/version");
+        },
+        blocking() {
+            console.warn("[crypto-debug] idbOpen: this tab is blocking a newer version");
+        },
+        terminated() {
+            console.warn("[crypto-debug] idbOpen: connection terminated unexpectedly");
         }
     });
+
+    const timeoutPromise = new Promise((_, reject) => {
+        window.setTimeout(() => {
+            reject(new Error("IndexedDB open timeout"));
+        }, IDB_OPEN_TIMEOUT_MS);
+    });
+
+    return Promise.race([openPromise, timeoutPromise]);
+}
+
+async function idbOpen() {
+    if (dbConnection) {
+        return dbConnection;
+    }
+
+    if (dbOpenPromise) {
+        return dbOpenPromise;
+    }
+
+    console.log("[crypto-debug] idbOpen: opening IndexedDB");
+
+    try {
+        dbOpenPromise = createIdbOpenPromise();
+        const db = await dbOpenPromise;
+        dbConnection = db;
+        console.log("[crypto-debug] idbOpen: success");
+        return db;
+    } catch (error) {
+        console.error("[crypto-debug] idbOpen: failed", error);
+        dbOpenPromise = null;
+
+        if (!idbRecoveryAttempted) {
+            idbRecoveryAttempted = true;
+            console.warn("[crypto-debug] idbOpen: attempting one-time IndexedDB recovery");
+            try {
+                closeIdbConnection();
+                await deleteDB("e2ee_chat");
+                console.warn("[crypto-debug] idbOpen: local IndexedDB deleted, retrying open");
+                dbOpenPromise = createIdbOpenPromise();
+                const recoveredDb = await dbOpenPromise;
+                dbConnection = recoveredDb;
+                console.log("[crypto-debug] idbOpen: recovery successful");
+                return recoveredDb;
+            } catch (recoveryError) {
+                console.error("[crypto-debug] idbOpen: recovery failed", recoveryError);
+                dbOpenPromise = null;
+            }
+        }
+
+        throw error;
+    }
+}
+
+function closeIdbConnection() {
+    if (dbConnection?.close) {
+        try {
+            dbConnection.close();
+        } catch {}
+    }
+    dbConnection = null;
+    dbOpenPromise = null;
 }
 
 export async function generateIdentityKeys() {
@@ -191,31 +266,41 @@ export async function getX3dhState() {
 }
 
 export async function initKeysIfNeeded() {
+    console.log("[crypto-debug] initKeysIfNeeded: start");
     const db = await idbOpen();
+    console.log("[crypto-debug] initKeysIfNeeded: db opened");
     let identity = await readIdentityRecord(db);
+    console.log("[crypto-debug] initKeysIfNeeded: identity loaded", { hasIdentity: Boolean(identity) });
     let signing = await readSigningRecord(db);
+    console.log("[crypto-debug] initKeysIfNeeded: signing loaded", { hasSigning: Boolean(signing) });
     let signedPreKey = await readSignedPreKeyRecord(db);
+    console.log("[crypto-debug] initKeysIfNeeded: signed prekey loaded", { hasSignedPreKey: Boolean(signedPreKey) });
     let oneTimePreKeys = await readOneTimePreKeysRecord(db);
+    console.log("[crypto-debug] initKeysIfNeeded: one-time prekeys loaded", { count: oneTimePreKeys.length });
 
     if (!identity) {
         console.log("Generating new identity encryption keys");
         identity = await generateIdentityKeys();
         await db.put("keys", await encryptIdentityRecord(identity, db), "identity");
+        console.log("[crypto-debug] initKeysIfNeeded: identity generated");
     }
 
     if (!signing) {
         console.log("Generating new identity signing keys");
         signing = await generateSigningKeys();
         await db.put("keys", await encryptSigningRecord(signing, db), "signing");
+        console.log("[crypto-debug] initKeysIfNeeded: signing generated");
     }
 
     if (!signedPreKey || shouldRotateSignedPreKey(signedPreKey)) {
         console.log("Generating signed prekey");
         signedPreKey = createSignedPreKey(signing);
         await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
+        console.log("[crypto-debug] initKeysIfNeeded: signed prekey generated");
     } else {
         signedPreKey = normalizeSignedPreKey(signedPreKey);
         await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
+        console.log("[crypto-debug] initKeysIfNeeded: signed prekey normalized");
     }
 
     const availablePreKeys = oneTimePreKeys.filter((prekey) => !prekey.is_used);
@@ -224,12 +309,14 @@ export async function initKeysIfNeeded() {
         const replenished = Array.from({ length: missingCount }, () => generatePreKeyPair());
         oneTimePreKeys = [...oneTimePreKeys, ...replenished];
         await db.put("keys", await encryptOneTimePreKeysRecord(oneTimePreKeys, db), "one_time_prekeys");
+        console.log("[crypto-debug] initKeysIfNeeded: replenished one-time prekeys", { missingCount });
     }
 
     const cleanupResult = await cleanupLocalKeyMaterial(db, signedPreKey);
     signedPreKey = cleanupResult.signedPreKey;
     oneTimePreKeys = cleanupResult.oneTimePreKeys;
     await cleanupLocalState(db);
+    console.log("[crypto-debug] initKeysIfNeeded: local cleanup done");
 
     console.log("Syncing public key with server");
 
@@ -281,8 +368,10 @@ export async function initKeysIfNeeded() {
         } else {
             console.log("X3DH key sync:", x3dhPayload);
         }
+        console.log("[crypto-debug] initKeysIfNeeded: complete");
     } catch (err) {
         console.error("Key upload failed", err);
+        console.error("[crypto-debug] initKeysIfNeeded: failed during server sync", err);
     }
 }
 
@@ -461,6 +550,8 @@ async function cleanupStoreEntries(db, storeName, shouldDelete) {
 
 export async function resetLocalCryptoState() {
     unlockedProtectorKey = null;
+    idbRecoveryAttempted = false;
+    closeIdbConnection();
     await deleteDB("e2ee_chat");
 }
 

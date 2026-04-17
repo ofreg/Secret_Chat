@@ -44,8 +44,8 @@ def messages_page(request: Request, current_user: User = Depends(get_current_use
                 other_user_id = chat.user2_id if chat.user1_id == current_user.id else chat.user1_id
                 selected_chat_user = db.query(User).filter(User.id == other_user_id).first()
                 if selected_chat_user:
-                    other_public_key = selected_chat_user.public_key
-                    other_identity_key = selected_chat_user.identity_key
+                    other_public_key = selected_chat_user.public_key or selected_chat_user.identity_key
+                    other_identity_key = selected_chat_user.identity_key or selected_chat_user.public_key
 
         for chat in chats:
             other_user_id = chat.user2_id if chat.user1_id == current_user.id else chat.user1_id
@@ -121,8 +121,8 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
         return {
             "status": "ok",
             "chat_id": chat.id,
-            "public_key": other_user.public_key,
-            "identity_key": other_user.identity_key,
+            "public_key": other_user.public_key or other_user.identity_key or "",
+            "identity_key": other_user.identity_key or other_user.public_key or "",
             "prekey_bundle": await (
                 issue_prekey_bundle(other_user.id, db) if is_new_chat else peek_prekey_bundle(other_user.id, db)
             ),
@@ -255,8 +255,8 @@ async def get_keys(chat_id: int, current_user: User = Depends(get_current_user))
 
         return {
             "status": "ok",
-            "public_key": other_user.public_key or "",
-            "identity_key": other_user.identity_key or "",
+            "public_key": other_user.public_key or other_user.identity_key or "",
+            "identity_key": other_user.identity_key or other_user.public_key or "",
             "prekey_bundle": await peek_prekey_bundle(other_user.id, db),
             "username": other_user.username,
             **build_avatar_props(other_user),

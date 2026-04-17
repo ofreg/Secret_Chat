@@ -1,4 +1,4 @@
-import { authFetch } from "./authClient.js?v=20260416d";
+import { authFetch } from "./authClient.js?v=20260416t";
 
 export function initUserSearch({ onChatStarted }) {
     const searchInput = document.getElementById("searchInput");

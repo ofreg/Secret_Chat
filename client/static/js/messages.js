@@ -1,5 +1,4 @@
 import {
-    ensureLocalAccountBinding,
     getCachedMessageText,
     deleteRatchetState,
     deriveSafetyNumber,
@@ -12,9 +11,9 @@ import {
     saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260414a";
-import { authFetch, ensureSession } from "./authClient.js?v=20260414a";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260414a";
+} from "./crypto.js?v=20260416t";
+import { authFetch, ensureSession } from "./authClient.js?v=20260416t";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260416t";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
@@ -30,6 +29,34 @@ let deferredLiveMessages = [];
 let chatTranscript = [];
 let currentFingerprint = null;
 let cryptoBootstrapPromise = null;
+let chatSocketOpened = false;
+let chatKeysRetryTimer = null;
+
+function buildReadinessSnapshot() {
+    return {
+        currentChatId,
+        chatSocketOpened,
+        hasChatSocket: Boolean(window.chatSocket),
+        hasMyPrivateKey: Boolean(myPrivateKeyCache),
+        hasMyPublicKey: Boolean(myPublicKeyCache),
+        hasOtherPublicKey: Boolean(window.otherPublicKey),
+        hasOtherIdentityKey: Boolean(window.otherIdentityKey),
+        hasOtherPrekeyBundle: Boolean(window.otherPrekeyBundle),
+        keysReady,
+        historySyncInProgress,
+        pendingMessages: pendingMessages.length,
+        deferredLiveMessages: deferredLiveMessages.length
+    };
+}
+
+function logChatState(label, extra = null, level = "info") {
+    const payload = {
+        ...buildReadinessSnapshot(),
+        ...(extra || {})
+    };
+    const logger = console[level] || console.log;
+    logger(`[chat-debug] ${label}`, payload);
+}
 
 window.sendMessage = async function () {
     if (cryptoBootstrapPromise) {
@@ -38,22 +65,24 @@ window.sendMessage = async function () {
 
     const chatId = getCurrentChatId();
     const input = document.getElementById("messageInput");
-    if (!input || !window.chatSocket || !myPublicKeyCache || !keysReady) {
-        console.warn("Send blocked:", {
-            hasInput: Boolean(input),
-            hasChatSocket: Boolean(window.chatSocket),
-            hasMyPublicKey: Boolean(myPublicKeyCache),
-            keysReady
-        });
+    if (!input || !window.chatSocket || !myPublicKeyCache) {
+        logChatState("send blocked: base prerequisites missing", {
+            hasInput: Boolean(input)
+        }, "warn");
         return;
     }
 
     if (!window.otherPublicKey) {
         const refreshed = await refreshChatKeys(chatId);
         if (!refreshed) {
-            console.warn("Recipient keys are not available yet");
+            logChatState("send blocked: recipient keys are not available yet", null, "warn");
             return;
         }
+    }
+
+    if (!keysReady) {
+        logChatState("send blocked: chat crypto is not ready yet", null, "warn");
+        return;
     }
 
     try {
@@ -95,6 +124,8 @@ function bindChatHeaderControls() {
 }
 
 window.addEventListener("load", async function () {
+    logChatState("messages page load started");
+
     const messageInput = document.getElementById("messageInput");
     if (messageInput) {
         messageInput.addEventListener("keydown", (event) => {
@@ -115,27 +146,31 @@ window.addEventListener("load", async function () {
     const meData = await meRes.json();
     if (meData.status === "ok") {
         myUsername = meData.username || "";
-        void ensureLocalAccountBinding(meData).then((bindingChanged) => {
-            if (bindingChanged) {
-                window.location.reload();
-            }
-        }).catch((error) => {
-            console.warn("Local account binding failed:", error);
-        });
+        logChatState("account binding skipped on messages page");
     }
 
     bindChatHeaderControls();
     connectUserSocket();
 
     cryptoBootstrapPromise = (async () => {
+        logChatState("crypto bootstrap started");
         await initKeysIfNeeded();
         myPrivateKeyCache = await getPrivateKeyUint8();
         myPublicKeyCache = await getPublicKey();
+        updateChatReadiness();
+        logChatState("crypto bootstrap finished");
+
+        if (currentChatId && !window.otherPublicKey) {
+            scheduleChatKeyRefresh(currentChatId);
+        }
 
         if (window.otherPublicKey || window.otherIdentityKey) {
             await refreshSafetyNumber();
         }
-    })();
+    })().catch((error) => {
+        console.error("Crypto bootstrap failed:", error, buildReadinessSnapshot());
+        throw error;
+    });
 
     const params = new URLSearchParams(window.location.search);
     const chatId = params.get("chat_id");
@@ -150,6 +185,12 @@ async function initializeChat(chatId) {
     currentChatId = String(chatId);
     const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
     const data = await res.json();
+    logChatState("initial chat keys response", {
+        responseStatus: data.status,
+        responseHasPublicKey: Boolean(data.public_key),
+        responseHasIdentityKey: Boolean(data.identity_key),
+        responseHasPrekeyBundle: Boolean(data.prekey_bundle)
+    });
 
     if (data.status !== "ok") {
         return;
@@ -157,13 +198,19 @@ async function initializeChat(chatId) {
 
     await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
     openChatSocket(chatId);
+    scheduleChatKeyRefresh(chatId);
 }
 
 async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "", avatarData = null) {
     window.otherPublicKey = publicKey || null;
     window.otherIdentityKey = identityKey || null;
     window.otherPrekeyBundle = prekeyBundle || null;
-    keysReady = true;
+    logChatState("applied chat keys", {
+        username,
+        appliedHasPublicKey: Boolean(window.otherPublicKey),
+        appliedHasIdentityKey: Boolean(window.otherIdentityKey),
+        appliedHasPrekeyBundle: Boolean(window.otherPrekeyBundle)
+    });
 
     const chatUserNameEl = document.getElementById("chatUserName");
     if (chatUserNameEl && username) {
@@ -172,15 +219,23 @@ async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, userna
 
     updateChatHeaderAvatar(avatarData);
     await refreshSafetyNumber();
+    updateChatReadiness();
 }
 
 async function refreshChatKeys(chatId) {
     if (!chatId) {
+        logChatState("refreshChatKeys skipped: missing chatId", null, "warn");
         return false;
     }
 
     const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
     const data = await res.json();
+    logChatState("refresh chat keys response", {
+        responseStatus: data.status,
+        responseHasPublicKey: Boolean(data.public_key),
+        responseHasIdentityKey: Boolean(data.identity_key),
+        responseHasPrekeyBundle: Boolean(data.prekey_bundle)
+    });
     if (data.status !== "ok" || !data.public_key) {
         return false;
     }
@@ -189,10 +244,53 @@ async function refreshChatKeys(chatId) {
     return true;
 }
 
+function clearChatKeyRefreshTimer() {
+    if (!chatKeysRetryTimer) {
+        return;
+    }
+
+    window.clearTimeout(chatKeysRetryTimer);
+    chatKeysRetryTimer = null;
+}
+
+function scheduleChatKeyRefresh(chatId, attempt = 0) {
+    clearChatKeyRefreshTimer();
+
+    if (!chatId || window.otherPublicKey || attempt >= 20) {
+        if (attempt >= 20) {
+            logChatState("chat key refresh stopped after max attempts", { attempt }, "warn");
+        }
+        return;
+    }
+
+    chatKeysRetryTimer = window.setTimeout(async () => {
+        if (!myPrivateKeyCache || !myPublicKeyCache) {
+            logChatState("chat key refresh postponed: local keys are not ready", { attempt: attempt + 1 }, "warn");
+            scheduleChatKeyRefresh(chatId, attempt + 1);
+            return;
+        }
+
+        try {
+            logChatState("chat key refresh attempt", { attempt: attempt + 1 });
+            const refreshed = await refreshChatKeys(chatId);
+            if (!refreshed) {
+                scheduleChatKeyRefresh(chatId, attempt + 1);
+            }
+        } catch (error) {
+            console.warn("Chat key refresh failed:", error);
+            scheduleChatKeyRefresh(chatId, attempt + 1);
+        }
+    }, 1500);
+}
+
 async function refreshSafetyNumber() {
     const verificationKey = window.otherIdentityKey || window.otherPublicKey;
     const myIdentityKey = myPublicKeyCache;
     if (!verificationKey || !myIdentityKey) {
+        logChatState("safety number skipped: missing key material", {
+            hasVerificationKey: Boolean(verificationKey),
+            hasMyIdentityKey: Boolean(myIdentityKey)
+        }, "warn");
         return;
     }
 
@@ -206,6 +304,8 @@ async function refreshSafetyNumber() {
 async function openChatSocket(chatId) {
     currentChatId = String(chatId);
     keysReady = false;
+    chatSocketOpened = false;
+    clearChatKeyRefreshTimer();
     pendingMessages = [];
     messageProcessingChain = Promise.resolve();
     renderedMessageIds = new Set();
@@ -228,10 +328,9 @@ async function openChatSocket(chatId) {
 
     chatSocket.onopen = function () {
         console.log("Chat ready:", chatId);
-        keysReady = true;
-
-        pendingMessages.forEach(queueMessageProcessing);
-        pendingMessages = [];
+        chatSocketOpened = true;
+        updateChatReadiness();
+        logChatState("chat websocket opened");
     };
 
     chatSocket.onmessage = async function (event) {
@@ -253,6 +352,10 @@ async function openChatSocket(chatId) {
 
         if (data.type === "message") {
             if (!keysReady) {
+                logChatState("message queued while keys are not ready", {
+                    messageId: data.message_id || null,
+                    historical: Boolean(data.historical)
+                }, "warn");
                 pendingMessages.push(data);
                 return;
             }
@@ -267,6 +370,20 @@ async function openChatSocket(chatId) {
     };
 
     window.chatSocket = chatSocket;
+}
+
+function updateChatReadiness() {
+    const cryptoReady = Boolean(chatSocketOpened && myPrivateKeyCache && myPublicKeyCache);
+    keysReady = cryptoReady;
+    logChatState("chat readiness updated");
+
+    if (!keysReady || pendingMessages.length === 0) {
+        return;
+    }
+
+    const queuedMessages = [...pendingMessages];
+    pendingMessages = [];
+    queuedMessages.forEach(queueMessageProcessing);
 }
 
 async function processMessage(data) {
@@ -320,7 +437,9 @@ async function processMessage(data) {
         renderMessage(chat, getSenderLabel(data.sender), text);
     } catch (err) {
         console.warn("Decrypt error:", err);
-        const fallbackText = cachedText || data.content;
+        const fallbackText = encryptedPayload
+            ? "[Encrypted message could not be decrypted on this device]"
+            : (cachedText || data.content);
 
         if (messageId) {
             renderedMessageIds.add(messageId);
@@ -533,7 +652,8 @@ async function rebuildRatchetStateFromTranscript(chatId, upToMessageId) {
                 otherPublicKeyBase64: window.otherPublicKey,
                 isOwnMessage,
                 allowStateReset: false,
-                restoreSenderState: true
+                restoreSenderState: true,
+                restoreSenderRootKey: isOwnMessage
             });
         } catch (replayError) {
             console.warn("Replay step failed", item.message_id, replayError);

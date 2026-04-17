@@ -61,19 +61,4 @@
     </section>
 </div>
 
-{% if init_keys %}
-<script type="module">
-import { authFetch } from "/static/js/authClient.js?v=20260414a";
-import { ensureLocalAccountBinding, initKeysIfNeeded } from "/static/js/crypto.js?v=20260414a";
-
-window.addEventListener("load", async () => {
-    const meResponse = await authFetch("/users/me");
-    const meData = await meResponse.json();
-    if (meData.status === "ok") {
-        await ensureLocalAccountBinding(meData);
-    }
-    await initKeysIfNeeded();
-});
-</script>
-{% endif %}
 {% endblock %}

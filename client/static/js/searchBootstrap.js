@@ -1,4 +1,4 @@
-import { initUserSearch } from "./userSearch.js?v=20260416d";
+import { initUserSearch } from "./userSearch.js?v=20260416t";
 
 window.addEventListener("load", () => {
     initUserSearch({

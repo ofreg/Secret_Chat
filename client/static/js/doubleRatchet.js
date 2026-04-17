@@ -6,13 +6,13 @@ import {
     nacl,
     naclUtil,
     saveRatchetState
-} from "./crypto.js?v=20260414a";
+} from "./crypto.js?v=20260416t";
 import {
     deriveInitiatorX3dhSecret,
     deriveResponderX3dhSecret,
     verifySignedPreKey
-} from "./x3dh.js?v=20260414a";
-import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260414a";
+} from "./x3dh.js?v=20260416t";
+import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260416t";
 
 const MAX_SKIPPED_KEYS = 64;
 const RATCHET_STATE_VERSION = 3;
