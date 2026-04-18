@@ -387,10 +387,12 @@ async function openChatSocket(chatId) {
 
         if (data.type === "message") {
             if (!keysReady) {
-                logChatState("message queued while keys are not ready", {
-                    messageId: data.message_id || null,
-                    historical: Boolean(data.historical)
-                }, "warn");
+                if (!data.historical) {
+                    logChatState("live message queued while keys are not ready", {
+                        messageId: data.message_id || null,
+                        historical: false
+                    }, "warn");
+                }
                 pendingMessages.push(data);
                 return;
             }

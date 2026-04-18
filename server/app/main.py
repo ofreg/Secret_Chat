@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.base import BaseHTTPMiddleware
 from collections import defaultdict
 from time import time
 import os
@@ -26,6 +25,18 @@ app.mount(
     StaticFiles(directory=os.getenv("STATIC_DIR", "/code/client/static")),
     name="static"
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    )
+    return response
 
 # ---------------------- DB ----------------------
 Base.metadata.create_all(bind=engine)
