@@ -462,7 +462,7 @@ async function processMessage(data) {
                 isOwnMessage,
                 allowStateReset: !isHistorical,
                 restoreSenderState: isHistorical,
-                restoreSenderRootKey: false
+                restoreSenderRootKey: isHistorical && isOwnMessage
             });
         } else {
             text = cachedText || data.content;
@@ -633,7 +633,8 @@ async function decryptWithRecovery({
     chatId,
     isOwnMessage,
     allowStateReset,
-    restoreSenderState
+    restoreSenderState,
+    restoreSenderRootKey
 }) {
     if (!isOwnMessage && payload?.version === 3 && payload?.x3dh) {
         const existingRatchetState = await getRatchetState(chatId);
@@ -658,7 +659,7 @@ async function decryptWithRecovery({
             isOwnMessage,
             allowStateReset,
             restoreSenderState,
-            restoreSenderRootKey: false
+            restoreSenderRootKey
         });
     } catch (error) {
         if (isOwnMessage || !data.message_id) {
