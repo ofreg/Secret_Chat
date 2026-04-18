@@ -6,13 +6,13 @@ import {
     nacl,
     naclUtil,
     saveRatchetState
-} from "./crypto.js?v=20260416t";
+} from "./crypto.js?v=20260416w";
 import {
     deriveInitiatorX3dhSecret,
     deriveResponderX3dhSecret,
     verifySignedPreKey
-} from "./x3dh.js?v=20260416t";
-import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260416t";
+} from "./x3dh.js?v=20260416w";
+import { deriveLabeledSecrets, hmacSha256 } from "./hkdf.js?v=20260416w";
 
 const MAX_SKIPPED_KEYS = 64;
 const RATCHET_STATE_VERSION = 3;
@@ -136,7 +136,7 @@ export async function decryptRatchetMessage({
             x3dhPayload: payload.x3dh || null
         });
     } catch (error) {
-        if (!allowStateReset || !shouldAttemptSessionReset(error, ratchetPayload.header)) {
+        if (!allowStateReset || !shouldAttemptSessionReset(error, ratchetPayload.header, payload.x3dh || null)) {
             throw error;
         }
 
@@ -478,12 +478,18 @@ async function decryptSecretBox(ratchetPayload, encryptionKey, macKey) {
     return naclUtil.encodeUTF8(plaintext);
 }
 
-function shouldAttemptSessionReset(error, header) {
+function shouldAttemptSessionReset(error, header, x3dhPayload = null) {
     if (!header) return false;
+    if (x3dhPayload) {
+        return true;
+    }
+
     if (header.n !== 0 || header.pn !== 0) return false;
 
     const message = error instanceof Error ? error.message : String(error);
-    return message.includes("Ratchet decryption failed") || message.includes("Missing receiving chain");
+    return message.includes("Ratchet decryption failed")
+        || message.includes("Missing receiving chain")
+        || message.includes("Message MAC verification failed");
 }
 
 async function kdfRoot(rootKeyBytes, dhOutputBytes) {

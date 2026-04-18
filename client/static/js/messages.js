@@ -5,15 +5,16 @@ import {
     getLastSeenMessageId,
     getPrivateKeyUint8,
     getPublicKey,
+    getRatchetState,
     getVerificationStatus,
     initKeysIfNeeded,
     resetLocalCryptoState,
     saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260416t";
-import { authFetch, ensureSession } from "./authClient.js?v=20260416t";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260416t";
+} from "./crypto.js?v=20260416w";
+import { authFetch, ensureSession } from "./authClient.js?v=20260416w";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260416w";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 let keysReady = false;
@@ -76,6 +77,35 @@ window.sendMessage = async function () {
         const refreshed = await refreshChatKeys(chatId);
         if (!refreshed) {
             logChatState("send blocked: recipient keys are not available yet", null, "warn");
+            return;
+        }
+    }
+
+    const activeRatchetState = await getRatchetState(chatId);
+    if (
+        activeRatchetState &&
+        activeRatchetState.DHr === null &&
+        Number(activeRatchetState.Ns || 0) === 0 &&
+        window.otherPrekeyBundle?.signed_prekey
+    ) {
+        logChatState("resetting stale unused initiator ratchet state before first send", {
+            hasExistingRatchetState: true,
+            hasRemoteDh: Boolean(activeRatchetState?.DHr),
+            sentCount: Number(activeRatchetState?.Ns || 0),
+            hasSignedPrekey: Boolean(window.otherPrekeyBundle?.signed_prekey)
+        }, "warn");
+        await deleteRatchetState(chatId);
+    }
+
+    const currentRatchetState = await getRatchetState(chatId);
+    const hasBootstrapBundle = Boolean(window.otherPublicKey && window.otherPrekeyBundle?.signed_prekey);
+    if (!currentRatchetState && !hasBootstrapBundle) {
+        await refreshChatKeys(chatId);
+        if (!(window.otherPublicKey && window.otherPrekeyBundle?.signed_prekey)) {
+            logChatState("send blocked: missing X3DH bootstrap bundle for first message", {
+                hasSignedPrekey: Boolean(window.otherPrekeyBundle?.signed_prekey),
+                hasOneTimePrekey: Boolean(window.otherPrekeyBundle?.one_time_prekey?.public_key)
+            }, "warn");
             return;
         }
     }
@@ -177,6 +207,7 @@ window.addEventListener("load", async function () {
     currentChatId = chatId;
 
     if (chatId) {
+        await cryptoBootstrapPromise;
         await initializeChat(chatId);
     }
 });
@@ -313,6 +344,9 @@ async function openChatSocket(chatId) {
     deferredLiveMessages = [];
     chatTranscript = [];
 
+    await deleteRatchetState(chatId);
+    logChatState("cleared local ratchet state before websocket history sync", { chatId });
+
     const chat = document.getElementById("chat");
     if (chat) {
         chat.innerHTML = "";
@@ -343,6 +377,7 @@ async function openChatSocket(chatId) {
 
         if (data.type === "history_complete") {
             historySyncInProgress = false;
+            updateChatReadiness();
 
             const queuedLiveMessages = [...deferredLiveMessages];
             deferredLiveMessages = [];
@@ -373,7 +408,12 @@ async function openChatSocket(chatId) {
 }
 
 function updateChatReadiness() {
-    const cryptoReady = Boolean(chatSocketOpened && myPrivateKeyCache && myPublicKeyCache);
+    const cryptoReady = Boolean(
+        chatSocketOpened &&
+        myPrivateKeyCache &&
+        myPublicKeyCache &&
+        !historySyncInProgress
+    );
     keysReady = cryptoReady;
     logChatState("chat readiness updated");
 
@@ -595,6 +635,19 @@ async function decryptWithRecovery({
     allowStateReset,
     restoreSenderState
 }) {
+    if (!isOwnMessage && payload?.version === 3 && payload?.x3dh) {
+        const existingRatchetState = await getRatchetState(chatId);
+        if (existingRatchetState?.DHr === null) {
+            logChatState("resetting outbound-only ratchet state before incoming X3DH decrypt", {
+                messageId: data.message_id,
+                hasExistingRatchetState: true,
+                hasRemoteDh: Boolean(existingRatchetState?.DHr),
+                hasIncomingX3dh: true
+            }, "warn");
+            await deleteRatchetState(chatId);
+        }
+    }
+
     try {
         return await decryptMessage({
             chatId,
@@ -631,12 +684,38 @@ async function decryptWithRecovery({
 
 async function rebuildRatchetStateFromTranscript(chatId, upToMessageId) {
     await deleteRatchetState(chatId);
+    let replayStartIndex = 0;
+    const replayItems = chatTranscript.filter((item) => item.message_id && item.message_id < upToMessageId);
 
-    for (const item of chatTranscript) {
-        if (!item.message_id || item.message_id >= upToMessageId) {
+    for (let index = replayItems.length - 1; index >= 0; index -= 1) {
+        const candidate = replayItems[index];
+        const candidatePayload = tryParsePayload(candidate.content);
+        const isOwnCandidate = candidate.sender === myUsername;
+
+        if (!isOwnCandidate || !candidatePayload?.version || !candidatePayload?.sender_state) {
             continue;
         }
 
+        try {
+            await decryptMessage({
+                chatId,
+                payload: candidatePayload,
+                myPrivateKeyUint8: myPrivateKeyCache,
+                myPublicKeyBase64: myPublicKeyCache,
+                otherPublicKeyBase64: window.otherPublicKey,
+                isOwnMessage: true,
+                allowStateReset: false,
+                restoreSenderState: true,
+                restoreSenderRootKey: true
+            });
+            replayStartIndex = index + 1;
+            break;
+        } catch (anchorError) {
+            console.warn("Replay anchor failed", candidate.message_id, anchorError);
+        }
+    }
+
+    for (const item of replayItems.slice(replayStartIndex)) {
         const payload = tryParsePayload(item.content);
         const isOwnMessage = item.sender === myUsername;
         if (!payload || !selectPayloadForCurrentUser(payload, isOwnMessage)) {

@@ -1,4 +1,4 @@
-import { naclUtil } from "./crypto.js?v=20260416t";
+import { naclUtil } from "./crypto.js?v=20260416w";
 
 export async function hkdfExtract(saltBytes, inputKeyMaterialBytes) {
     const normalizedSalt = saltBytes && saltBytes.length
