@@ -262,18 +262,7 @@ def refresh_token_route(request: Request, refresh_token: str = Cookie(None)):
 
         ensure_account_instance_id(user, db)
         user_email = user.email
-        db.delete(token_record)
-
-        new_refresh_token = create_refresh_token()
-        db.add(
-            RefreshToken(
-                token=hash_refresh_token(new_refresh_token),
-                user_id=user.id,
-                expires_at=utc_now() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
-                user_agent=user_agent,
-                ip_address=ip_address,
-            )
-        )
+        token_record.expires_at = utc_now() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
         db.commit()
     finally:
         db.close()
@@ -294,7 +283,7 @@ def refresh_token_route(request: Request, refresh_token: str = Cookie(None)):
     )
     response.set_cookie(
         "refresh_token",
-        new_refresh_token,
+        refresh_token,
         httponly=True,
         secure=COOKIE_SECURE,
         samesite="lax",

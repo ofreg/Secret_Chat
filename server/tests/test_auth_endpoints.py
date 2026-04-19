@@ -45,7 +45,7 @@ def test_auth_flow_and_profile_endpoints(client):
     response = client.post("/refresh", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/profile"
-    assert client.cookies.get("refresh_token") != old_refresh
+    assert client.cookies.get("refresh_token") == old_refresh
 
     response = client.post("/logout", follow_redirects=False)
     assert response.status_code == 303
