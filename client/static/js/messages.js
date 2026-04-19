@@ -12,11 +12,12 @@ import {
     saveVerificationStatus,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260416w";
+} from "./crypto.js?v=20260419a";
 import { authFetch, ensureSession } from "./authClient.js?v=20260416w";
-import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260416w";
+import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260419a";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
+const DEBUG_CHAT = false;
 let keysReady = false;
 let pendingMessages = [];
 let myPrivateKeyCache = null;
@@ -51,6 +52,10 @@ function buildReadinessSnapshot() {
 }
 
 function logChatState(label, extra = null, level = "info") {
+    if (!DEBUG_CHAT) {
+        return;
+    }
+
     const payload = {
         ...buildReadinessSnapshot(),
         ...(extra || {})
@@ -361,7 +366,9 @@ async function openChatSocket(chatId) {
     const chatSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/${chatId}`);
 
     chatSocket.onopen = function () {
-        console.log("Chat ready:", chatId);
+        if (DEBUG_CHAT) {
+            console.log("Chat ready:", chatId);
+        }
         chatSocketOpened = true;
         updateChatReadiness();
         logChatState("chat websocket opened");
@@ -528,7 +535,9 @@ function connectUserSocket() {
     };
 
     userSocket.onclose = function (event) {
-        console.log("User WS closed", event);
+        if (DEBUG_CHAT) {
+            console.log("User WS closed", event);
+        }
     };
 }
 

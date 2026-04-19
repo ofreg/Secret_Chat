@@ -1,5 +1,5 @@
-import { nacl, naclUtil } from "./crypto.js?v=20260416w";
-import { decryptRatchetMessage, encryptRatchetMessage } from "./doubleRatchet.js?v=20260416w";
+import { nacl, naclUtil } from "./crypto.js?v=20260419a";
+import { decryptRatchetMessage, encryptRatchetMessage } from "./doubleRatchet.js?v=20260419a";
 
 export async function encryptMessage({
     chatId,

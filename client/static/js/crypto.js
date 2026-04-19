@@ -3,6 +3,7 @@ import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
 import { deleteDB, openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
 import { authFetch } from "./authClient.js?v=20260416w";
 
+const DEBUG_CRYPTO = false;
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
 const ENCRYPTED_VERSION = 2;
@@ -17,10 +18,22 @@ let dbOpenPromise = null;
 let dbConnection = null;
 let idbRecoveryAttempted = false;
 
+function debugCrypto(...args) {
+    if (DEBUG_CRYPTO) {
+        console.log(...args);
+    }
+}
+
+function warnCrypto(...args) {
+    if (DEBUG_CRYPTO) {
+        console.warn(...args);
+    }
+}
+
 function createIdbOpenPromise() {
     const openPromise = openDB("e2ee_chat", 4, {
         upgrade(db) {
-            console.log("[crypto-debug] idbOpen: upgrade triggered");
+            debugCrypto("[crypto-debug] idbOpen: upgrade triggered");
             if (!db.objectStoreNames.contains("keys")) {
                 db.createObjectStore("keys");
             }
@@ -32,13 +45,13 @@ function createIdbOpenPromise() {
             }
         },
         blocked() {
-            console.warn("[crypto-debug] idbOpen: blocked by another open tab/version");
+            warnCrypto("[crypto-debug] idbOpen: blocked by another open tab/version");
         },
         blocking() {
-            console.warn("[crypto-debug] idbOpen: this tab is blocking a newer version");
+            warnCrypto("[crypto-debug] idbOpen: this tab is blocking a newer version");
         },
         terminated() {
-            console.warn("[crypto-debug] idbOpen: connection terminated unexpectedly");
+            warnCrypto("[crypto-debug] idbOpen: connection terminated unexpectedly");
         }
     });
 
@@ -60,13 +73,13 @@ async function idbOpen() {
         return dbOpenPromise;
     }
 
-    console.log("[crypto-debug] idbOpen: opening IndexedDB");
+    debugCrypto("[crypto-debug] idbOpen: opening IndexedDB");
 
     try {
         dbOpenPromise = createIdbOpenPromise();
         const db = await dbOpenPromise;
         dbConnection = db;
-        console.log("[crypto-debug] idbOpen: success");
+        debugCrypto("[crypto-debug] idbOpen: success");
         return db;
     } catch (error) {
         console.error("[crypto-debug] idbOpen: failed", error);
@@ -74,15 +87,15 @@ async function idbOpen() {
 
         if (!idbRecoveryAttempted) {
             idbRecoveryAttempted = true;
-            console.warn("[crypto-debug] idbOpen: attempting one-time IndexedDB recovery");
+            warnCrypto("[crypto-debug] idbOpen: attempting one-time IndexedDB recovery");
             try {
                 closeIdbConnection();
                 await deleteDB("e2ee_chat");
-                console.warn("[crypto-debug] idbOpen: local IndexedDB deleted, retrying open");
+                warnCrypto("[crypto-debug] idbOpen: local IndexedDB deleted, retrying open");
                 dbOpenPromise = createIdbOpenPromise();
                 const recoveredDb = await dbOpenPromise;
                 dbConnection = recoveredDb;
-                console.log("[crypto-debug] idbOpen: recovery successful");
+                debugCrypto("[crypto-debug] idbOpen: recovery successful");
                 return recoveredDb;
             } catch (recoveryError) {
                 console.error("[crypto-debug] idbOpen: recovery failed", recoveryError);
@@ -266,41 +279,41 @@ export async function getX3dhState() {
 }
 
 export async function initKeysIfNeeded() {
-    console.log("[crypto-debug] initKeysIfNeeded: start");
+    debugCrypto("[crypto-debug] initKeysIfNeeded: start");
     const db = await idbOpen();
-    console.log("[crypto-debug] initKeysIfNeeded: db opened");
+    debugCrypto("[crypto-debug] initKeysIfNeeded: db opened");
     let identity = await readIdentityRecord(db);
-    console.log("[crypto-debug] initKeysIfNeeded: identity loaded", { hasIdentity: Boolean(identity) });
+    debugCrypto("[crypto-debug] initKeysIfNeeded: identity loaded", { hasIdentity: Boolean(identity) });
     let signing = await readSigningRecord(db);
-    console.log("[crypto-debug] initKeysIfNeeded: signing loaded", { hasSigning: Boolean(signing) });
+    debugCrypto("[crypto-debug] initKeysIfNeeded: signing loaded", { hasSigning: Boolean(signing) });
     let signedPreKey = await readSignedPreKeyRecord(db);
-    console.log("[crypto-debug] initKeysIfNeeded: signed prekey loaded", { hasSignedPreKey: Boolean(signedPreKey) });
+    debugCrypto("[crypto-debug] initKeysIfNeeded: signed prekey loaded", { hasSignedPreKey: Boolean(signedPreKey) });
     let oneTimePreKeys = await readOneTimePreKeysRecord(db);
-    console.log("[crypto-debug] initKeysIfNeeded: one-time prekeys loaded", { count: oneTimePreKeys.length });
+    debugCrypto("[crypto-debug] initKeysIfNeeded: one-time prekeys loaded", { count: oneTimePreKeys.length });
 
     if (!identity) {
-        console.log("Generating new identity encryption keys");
+        debugCrypto("Generating new identity encryption keys");
         identity = await generateIdentityKeys();
         await db.put("keys", await encryptIdentityRecord(identity, db), "identity");
-        console.log("[crypto-debug] initKeysIfNeeded: identity generated");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: identity generated");
     }
 
     if (!signing) {
-        console.log("Generating new identity signing keys");
+        debugCrypto("Generating new identity signing keys");
         signing = await generateSigningKeys();
         await db.put("keys", await encryptSigningRecord(signing, db), "signing");
-        console.log("[crypto-debug] initKeysIfNeeded: signing generated");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: signing generated");
     }
 
     if (!signedPreKey || shouldRotateSignedPreKey(signedPreKey)) {
-        console.log("Generating signed prekey");
+        debugCrypto("Generating signed prekey");
         signedPreKey = createSignedPreKey(signing);
         await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
-        console.log("[crypto-debug] initKeysIfNeeded: signed prekey generated");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: signed prekey generated");
     } else {
         signedPreKey = normalizeSignedPreKey(signedPreKey);
         await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
-        console.log("[crypto-debug] initKeysIfNeeded: signed prekey normalized");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: signed prekey normalized");
     }
 
     const availablePreKeys = oneTimePreKeys.filter((prekey) => !prekey.is_used);
@@ -309,16 +322,14 @@ export async function initKeysIfNeeded() {
         const replenished = Array.from({ length: missingCount }, () => generatePreKeyPair());
         oneTimePreKeys = [...oneTimePreKeys, ...replenished];
         await db.put("keys", await encryptOneTimePreKeysRecord(oneTimePreKeys, db), "one_time_prekeys");
-        console.log("[crypto-debug] initKeysIfNeeded: replenished one-time prekeys", { missingCount });
+        debugCrypto("[crypto-debug] initKeysIfNeeded: replenished one-time prekeys", { missingCount });
     }
 
     const cleanupResult = await cleanupLocalKeyMaterial(db, signedPreKey);
     signedPreKey = cleanupResult.signedPreKey;
     oneTimePreKeys = cleanupResult.oneTimePreKeys;
     await cleanupLocalState(db);
-    console.log("[crypto-debug] initKeysIfNeeded: local cleanup done");
-
-    console.log("Syncing public key with server");
+    debugCrypto("[crypto-debug] initKeysIfNeeded: local cleanup done");
 
     try {
         const legacyResponse = await authFetch("/users/keys", {
@@ -331,7 +342,7 @@ export async function initKeysIfNeeded() {
             })
         });
 
-        console.log("Legacy key sync:", await legacyResponse.json());
+        debugCrypto("Legacy key sync:", await legacyResponse.json());
 
         const x3dhResponse = await authFetch("/users/x3dh-keys", {
             method: "POST",
@@ -366,9 +377,9 @@ export async function initKeysIfNeeded() {
         if (!x3dhResponse.ok || x3dhPayload?.status === "error") {
             console.error("X3DH key sync failed:", x3dhPayload);
         } else {
-            console.log("X3DH key sync:", x3dhPayload);
+            debugCrypto("X3DH key sync:", x3dhPayload);
         }
-        console.log("[crypto-debug] initKeysIfNeeded: complete");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: complete");
     } catch (err) {
         console.error("Key upload failed", err);
         console.error("[crypto-debug] initKeysIfNeeded: failed during server sync", err);
