@@ -15,6 +15,14 @@ import {
 } from "./crypto.js?v=20260419a";
 import { authFetch, ensureSession } from "./authClient.js?v=20260416w";
 import { decryptMessage, encryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260419a";
+import {
+    bindChatHeaderControls,
+    getSenderLabel,
+    markChatAsUpdated,
+    renderMessage,
+    setUserStatus,
+    updateChatHeaderAvatar
+} from "./messagesUi.js?v=20260419a";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 const DEBUG_CHAT = false;
@@ -139,24 +147,6 @@ window.sendMessage = async function () {
         console.error("Encryption error:", err);
     }
 };
-
-function bindChatHeaderControls() {
-    const toggle = document.getElementById("chatInfoToggle");
-    const close = document.getElementById("chatInfoClose");
-    const panel = document.getElementById("chatInfoPanel");
-
-    if (!toggle || !close || !panel) {
-        return;
-    }
-
-    toggle.onclick = function () {
-        panel.hidden = !panel.hidden;
-    };
-
-    close.onclick = function () {
-        panel.hidden = true;
-    };
-}
 
 window.addEventListener("load", async function () {
     logChatState("messages page load started");
@@ -455,7 +445,7 @@ async function processMessage(data) {
     }
 
     if (isHistorical && messageId && messageId <= lastSeenMessageId && cachedText) {
-        renderMessage(chat, getSenderLabel(data.sender), cachedText);
+        renderMessage(chat, getSenderLabel(data.sender, myUsername), cachedText);
         renderedMessageIds.add(messageId);
         return;
     }
@@ -483,7 +473,7 @@ async function processMessage(data) {
             renderedMessageIds.add(messageId);
         }
 
-        renderMessage(chat, getSenderLabel(data.sender), text);
+        renderMessage(chat, getSenderLabel(data.sender, myUsername), text);
     } catch (err) {
         console.warn("Decrypt error:", err);
         const fallbackText = encryptedPayload
@@ -494,22 +484,8 @@ async function processMessage(data) {
             renderedMessageIds.add(messageId);
         }
 
-        renderMessage(chat, getSenderLabel(data.sender), fallbackText);
+        renderMessage(chat, getSenderLabel(data.sender, myUsername), fallbackText);
     }
-}
-
-function renderMessage(chat, senderLabel, text) {
-    const div = document.createElement("div");
-    const sender = document.createElement("b");
-    sender.textContent = `${senderLabel}:`;
-    div.appendChild(sender);
-    div.appendChild(document.createTextNode(` ${text}`));
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
-}
-
-function getSenderLabel(senderName) {
-    return senderName === myUsername ? "You" : senderName;
 }
 
 let userSocket = null;
@@ -562,50 +538,8 @@ async function loadChats() {
     }
 }
 
-function markChatAsUpdated(chatId) {
-    const link = document.querySelector(`a[href="/messages?chat_id=${chatId}"]`);
-    if (link) link.style.fontWeight = "bold";
-}
-
-function setUserStatus(isOnline) {
-    const statusDot = document.getElementById("userStatus");
-    if (!statusDot) return;
-
-    if (isOnline) {
-        statusDot.classList.remove("offline");
-        statusDot.classList.add("online");
-    } else {
-        statusDot.classList.remove("online");
-        statusDot.classList.add("offline");
-    }
-}
-
 function getWebSocketProtocol() {
     return window.location.protocol === "https:" ? "wss" : "ws";
-}
-
-function updateChatHeaderAvatar(avatarData) {
-    const avatarRoot = document.getElementById("chatUserAvatar");
-    if (!avatarRoot) return;
-
-    avatarRoot.innerHTML = "";
-
-    if (avatarData?.avatar_url) {
-        const image = document.createElement("img");
-        image.src = avatarData.avatar_url;
-        image.alt = "Avatar";
-        image.className = "chat-user-avatar-image";
-        avatarRoot.appendChild(image);
-        return;
-    }
-
-    const fallback = document.createElement("div");
-    fallback.className = "chat-user-avatar-fallback";
-    fallback.textContent = avatarData?.avatar_initial || "?";
-    if (avatarData?.avatar_class) {
-        fallback.classList.add(avatarData.avatar_class);
-    }
-    avatarRoot.appendChild(fallback);
 }
 
 function getCurrentChatId() {
