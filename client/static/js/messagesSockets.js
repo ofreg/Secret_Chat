@@ -68,7 +68,7 @@ export function createUserSocket({
 
     return userSocket;
 }
-
+ 
 export async function reloadChatList(authFetch) {
     const response = await authFetch("/messages");
     if (!response.ok) {
