@@ -71,6 +71,10 @@ export function createUserSocket({
 
 export async function reloadChatList(authFetch) {
     const response = await authFetch("/messages");
+    if (!response.ok) {
+        return false;
+    }
+
     const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
@@ -84,7 +88,7 @@ export async function reloadChatList(authFetch) {
 
     const noChatsText = document.getElementById("noChatsText");
     if (!currentChatList) {
-        return;
+        return true;
     }
 
     if (currentChatList.children.length > 0) {
@@ -92,4 +96,6 @@ export async function reloadChatList(authFetch) {
     } else {
         if (noChatsText) noChatsText.style.display = "block";
     }
+
+    return true;
 }

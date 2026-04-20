@@ -102,7 +102,7 @@ export function createHistoryController({
                     myPublicKeyBase64: getMyPublicKey(),
                     otherPublicKeyBase64: getOtherPublicKey(),
                     isOwnMessage,
-                    allowStateReset: false,
+                    allowStateReset: !isOwnMessage,
                     restoreSenderState: true,
                     restoreSenderRootKey: isOwnMessage
                 });
@@ -161,7 +161,7 @@ export function createHistoryController({
                 myPublicKeyBase64: getMyPublicKey(),
                 otherPublicKeyBase64: getOtherPublicKey(),
                 isOwnMessage,
-                allowStateReset: false,
+                allowStateReset: !isOwnMessage,
                 restoreSenderState,
                 restoreSenderRootKey: true
             });
@@ -202,7 +202,7 @@ export function createHistoryController({
                     payload,
                     chatId,
                     isOwnMessage,
-                    allowStateReset: !isHistorical,
+                    allowStateReset: !isOwnMessage,
                     restoreSenderState: isHistorical,
                     restoreSenderRootKey: isHistorical && isOwnMessage
                 });

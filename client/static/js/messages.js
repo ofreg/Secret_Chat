@@ -23,8 +23,15 @@ import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260420b";
-import { createHistoryController } from "./messagesHistory.js?v=20260420c";
+} from "./messagesSockets.js?v=20260420g";
+import { createHistoryController } from "./messagesHistory.js?v=20260420e";
+import {
+    applyChatKeysFlow,
+    initializeChatFlow,
+    refreshChatKeysFlow,
+    refreshSafetyNumberFlow,
+    sendCurrentMessage
+} from "./messagesChatFlow.js?v=20260420d";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 const DEBUG_CHAT = false;
@@ -81,80 +88,35 @@ function logChatState(label, extra = null, level = "info") {
     logger(`[chat-debug] ${label}`, payload);
 }
 
+function sortQueuedMessages(messages) {
+    return [...messages].sort((left, right) => {
+        const leftId = Number(left?.message_id || 0);
+        const rightId = Number(right?.message_id || 0);
+        return leftId - rightId;
+    });
+}
+
 window.sendMessage = async function () {
-    if (cryptoBootstrapPromise) {
-        await cryptoBootstrapPromise;
-    }
-
-    const chatId = getCurrentChatId();
-    const input = document.getElementById("messageInput");
-    if (!input || !window.chatSocket || !myPublicKeyCache) {
-        logChatState("send blocked: base prerequisites missing", {
-            hasInput: Boolean(input)
-        }, "warn");
-        return;
-    }
-
-    if (!window.otherPublicKey) {
-        const refreshed = await refreshChatKeys(chatId);
-        if (!refreshed) {
-            logChatState("send blocked: recipient keys are not available yet", null, "warn");
-            return;
-        }
-    }
-
-    const activeRatchetState = await getRatchetState(chatId);
-    if (
-        activeRatchetState &&
-        activeRatchetState.DHr === null &&
-        Number(activeRatchetState.Ns || 0) === 0 &&
-        window.otherPrekeyBundle?.signed_prekey
-    ) {
-        logChatState("resetting stale unused initiator ratchet state before first send", {
-            hasExistingRatchetState: true,
-            hasRemoteDh: Boolean(activeRatchetState?.DHr),
-            sentCount: Number(activeRatchetState?.Ns || 0),
-            hasSignedPrekey: Boolean(window.otherPrekeyBundle?.signed_prekey)
-        }, "warn");
-        await deleteRatchetState(chatId);
-    }
-
-    const currentRatchetState = await getRatchetState(chatId);
-    const hasBootstrapBundle = Boolean(window.otherPublicKey && window.otherPrekeyBundle?.signed_prekey);
-    if (!currentRatchetState && !hasBootstrapBundle) {
-        await refreshChatKeys(chatId);
-        if (!(window.otherPublicKey && window.otherPrekeyBundle?.signed_prekey)) {
-            logChatState("send blocked: missing X3DH bootstrap bundle for first message", {
-                hasSignedPrekey: Boolean(window.otherPrekeyBundle?.signed_prekey),
-                hasOneTimePrekey: Boolean(window.otherPrekeyBundle?.one_time_prekey?.public_key)
-            }, "warn");
-            return;
-        }
-    }
-
-    if (!keysReady) {
-        logChatState("send blocked: chat crypto is not ready yet", null, "warn");
-        return;
-    }
-
-    try {
-        const messageText = input.value.trim();
-        if (!messageText) return;
-
-        const payload = await encryptMessage({
-            chatId,
-            message: messageText,
-            recipientPublicBase64: window.otherPublicKey,
-            recipientPrekeyBundle: window.otherPrekeyBundle,
-            senderPublicBase64: myPublicKeyCache,
-            myPrivateKeyUint8: myPrivateKeyCache
-        });
-
-        window.chatSocket.send(JSON.stringify(payload));
-        input.value = "";
-    } catch (err) {
-        console.error("Encryption error:", err);
-    }
+    await sendCurrentMessage({
+        awaitCryptoBootstrap: async () => {
+            if (cryptoBootstrapPromise) {
+                await cryptoBootstrapPromise;
+            }
+        },
+        getCurrentChatId,
+        getInput: () => document.getElementById("messageInput"),
+        getChatSocket: () => window.chatSocket,
+        getMyPublicKey: () => myPublicKeyCache,
+        getMyPrivateKey: () => myPrivateKeyCache,
+        getOtherPublicKey: () => window.otherPublicKey,
+        getOtherPrekeyBundle: () => window.otherPrekeyBundle,
+        refreshChatKeys,
+        isKeysReady: () => keysReady,
+        logChatState,
+        getRatchetState,
+        deleteRatchetState,
+        encryptMessage
+    });
 };
 
 window.addEventListener("load", async function () {
@@ -217,66 +179,51 @@ window.addEventListener("load", async function () {
 });
 
 async function initializeChat(chatId) {
-    currentChatId = String(chatId);
-    const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
-    const data = await res.json();
-    logChatState("initial chat keys response", {
-        responseStatus: data.status,
-        responseHasPublicKey: Boolean(data.public_key),
-        responseHasIdentityKey: Boolean(data.identity_key),
-        responseHasPrekeyBundle: Boolean(data.prekey_bundle)
+    await initializeChatFlow({
+        chatId,
+        setCurrentChatId: (value) => {
+            currentChatId = value;
+        },
+        authFetch,
+        logChatState,
+        applyChatKeys,
+        openChatSocket,
+        scheduleChatKeyRefresh
     });
-
-    if (data.status !== "ok") {
-        return;
-    }
-
-    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
-    openChatSocket(chatId);
-    scheduleChatKeyRefresh(chatId);
 }
 
 async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "", avatarData = null) {
-    window.otherPublicKey = publicKey || null;
-    window.otherIdentityKey = identityKey || null;
-    window.otherPrekeyBundle = prekeyBundle || null;
-    logChatState("applied chat keys", {
+    await applyChatKeysFlow({
+        publicKey,
+        identityKey,
+        prekeyBundle,
         username,
-        appliedHasPublicKey: Boolean(window.otherPublicKey),
-        appliedHasIdentityKey: Boolean(window.otherIdentityKey),
-        appliedHasPrekeyBundle: Boolean(window.otherPrekeyBundle)
+        avatarData,
+        setOtherKeys: ({ publicKey: nextPublicKey, identityKey: nextIdentityKey, prekeyBundle: nextPrekeyBundle }) => {
+            window.otherPublicKey = nextPublicKey;
+            window.otherIdentityKey = nextIdentityKey;
+            window.otherPrekeyBundle = nextPrekeyBundle;
+        },
+        logChatState,
+        setChatUserName: (nextUsername) => {
+            const chatUserNameEl = document.getElementById("chatUserName");
+            if (chatUserNameEl && nextUsername) {
+                chatUserNameEl.textContent = nextUsername;
+            }
+        },
+        updateChatHeaderAvatar,
+        refreshSafetyNumber,
+        updateChatReadiness
     });
-
-    const chatUserNameEl = document.getElementById("chatUserName");
-    if (chatUserNameEl && username) {
-        chatUserNameEl.textContent = username;
-    }
-
-    updateChatHeaderAvatar(avatarData);
-    await refreshSafetyNumber();
-    updateChatReadiness();
 }
 
 async function refreshChatKeys(chatId) {
-    if (!chatId) {
-        logChatState("refreshChatKeys skipped: missing chatId", null, "warn");
-        return false;
-    }
-
-    const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
-    const data = await res.json();
-    logChatState("refresh chat keys response", {
-        responseStatus: data.status,
-        responseHasPublicKey: Boolean(data.public_key),
-        responseHasIdentityKey: Boolean(data.identity_key),
-        responseHasPrekeyBundle: Boolean(data.prekey_bundle)
+    return refreshChatKeysFlow({
+        chatId,
+        authFetch,
+        logChatState,
+        applyChatKeys
     });
-    if (data.status !== "ok" || !data.public_key) {
-        return false;
-    }
-
-    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
-    return true;
 }
 
 function clearChatKeyRefreshTimer() {
@@ -319,21 +266,17 @@ function scheduleChatKeyRefresh(chatId, attempt = 0) {
 }
 
 async function refreshSafetyNumber() {
-    const verificationKey = window.otherIdentityKey || window.otherPublicKey;
-    const myIdentityKey = myPublicKeyCache;
-    if (!verificationKey || !myIdentityKey) {
-        logChatState("safety number skipped: missing key material", {
-            hasVerificationKey: Boolean(verificationKey),
-            hasMyIdentityKey: Boolean(myIdentityKey)
-        }, "warn");
-        return;
-    }
-
-    const fp = await deriveSafetyNumber(myIdentityKey, verificationKey);
-    currentFingerprint = fp;
-    const el = document.getElementById("fingerprint");
-    if (el) el.innerText = fp;
-    await updateVerificationUi(fp, verificationKey, myIdentityKey);
+    await refreshSafetyNumberFlow({
+        otherIdentityKey: window.otherIdentityKey,
+        otherPublicKey: window.otherPublicKey,
+        myIdentityKey: myPublicKeyCache,
+        deriveSafetyNumber,
+        setCurrentFingerprint: (fp) => {
+            currentFingerprint = fp;
+        },
+        updateVerificationUi,
+        logChatState
+    });
 }
 
 async function openChatSocket(chatId) {
@@ -375,7 +318,7 @@ async function openChatSocket(chatId) {
             historySyncInProgress = false;
             updateChatReadiness();
 
-            const queuedLiveMessages = [...deferredLiveMessages];
+            const queuedLiveMessages = sortQueuedMessages(deferredLiveMessages);
             deferredLiveMessages = [];
             queuedLiveMessages.forEach(historyController.queueMessageProcessing);
         },
@@ -417,7 +360,7 @@ function updateChatReadiness() {
         return;
     }
 
-    const queuedMessages = [...pendingMessages];
+    const queuedMessages = sortQueuedMessages(pendingMessages);
     pendingMessages = [];
     queuedMessages.forEach(historyController.queueMessageProcessing);
 }
@@ -442,6 +385,11 @@ function connectUserSocket() {
 }
 
 async function loadChats() {
+    const sessionOk = await ensureSession();
+    if (!sessionOk) {
+        return;
+    }
+
     await reloadChatList(authFetch);
 }
 
