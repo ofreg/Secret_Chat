@@ -23,16 +23,16 @@ import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260420g";
-import { createHistoryController } from "./messagesHistory.js?v=20260420e";
+} from "./messagesSockets.js?v=20260420h";
+import { createHistoryController } from "./messagesHistory.js?v=20260420h";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260420d";
-import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
+} from "./messagesChatFlow.js?v=20260420h";
+import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420h";
 
 const DEBUG_CHAT = false;
 let keysReady = false;
@@ -398,6 +398,15 @@ function getCurrentChatId() {
 }
 
 async function updateVerificationUi(fp, verificationKey, myIdentityKey) {
+    return updateVerificationUiFlow({
+        fingerprint: fp,
+        verificationKey,
+        myIdentityKey,
+        getVerificationStatus,
+        saveVerificationStatus,
+        resetLocalCryptoState
+    });
+
     const statusEl = document.getElementById("verificationStatus");
     const verifyBtn = document.getElementById("verifyFingerprintBtn");
     const resetBtn = document.getElementById("resetFingerprintBtn");

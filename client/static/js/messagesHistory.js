@@ -6,7 +6,7 @@ import {
     saveCachedMessageText,
     saveLastSeenMessageId
 } from "./crypto.js?v=20260420c";
-import { decryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260420c";
+import { decryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260420h";
 
 export function createHistoryController({
     getMyUsername,
