@@ -50,3 +50,26 @@ def test_auth_flow_and_profile_endpoints(client):
     response = client.post("/logout", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+
+
+def test_refresh_json_response_and_security_headers(client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+
+    old_refresh = client.cookies.get("refresh_token")
+    response = client.post(
+        "/refresh",
+        headers={
+            "X-Requested-With": "fetch",
+            "Accept": "application/json",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert client.cookies.get("refresh_token") == old_refresh
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "camera=()" in response.headers["Permissions-Policy"]

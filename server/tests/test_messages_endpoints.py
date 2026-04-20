@@ -142,3 +142,45 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert response.status_code == 200
     assert "/static/js/messages.js" in response.text
     assert "public-key-user2" in response.text
+
+
+def test_messages_key_endpoints_fallback_to_identity_key(client, second_client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    assert upload_public_key(client, "public-key-user1").status_code == 200
+    assert upload_x3dh_keys(
+        second_client,
+        public_key="",
+        identity_key="identity-user2-only",
+        signing_key="signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    ).status_code == 200
+
+    response = client.post("/messages/start", data={"username": "user2"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["public_key"] == "identity-user2-only"
+    assert payload["identity_key"] == "identity-user2-only"
+
+    response = client.get("/messages/get_keys", params={"chat_id": payload["chat_id"]})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["public_key"] == "identity-user2-only"
+    assert payload["identity_key"] == "identity-user2-only"
+
+
+def test_security_headers_present_on_messages_page(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "camera=()" in response.headers["Permissions-Policy"]
