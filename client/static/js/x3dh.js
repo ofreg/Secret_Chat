@@ -1,5 +1,5 @@
-import { nacl, naclUtil } from "./crypto.js?v=20260419a";
-import { concatChunks, hkdf } from "./hkdf.js?v=20260419a";
+import { nacl, naclUtil } from "./crypto.js?v=20260420i";
+import { concatChunks, hkdf } from "./hkdf.js?v=20260420i";
 
 export function verifySignedPreKey({ signingKeyBase64, signedPreKeyBase64, signatureBase64 }) {
     if (!signingKeyBase64 || !signedPreKeyBase64 || !signatureBase64) {

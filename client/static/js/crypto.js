@@ -1,7 +1,7 @@
 import nacl from "https://cdn.jsdelivr.net/npm/tweetnacl/+esm";
 import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
 import { deleteDB, openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
-import { authFetch } from "./authClient.js?v=20260416w";
+import { authFetch } from "./authClient.js?v=20260420i";
 
 const DEBUG_CRYPTO = false;
 const PREKEY_BATCH_SIZE = 10;

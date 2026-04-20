@@ -8,9 +8,9 @@ import {
     initKeysIfNeeded,
     resetLocalCryptoState,
     saveVerificationStatus
-} from "./crypto.js?v=20260419a";
-import { authFetch, ensureSession } from "./authClient.js?v=20260416w";
-import { encryptMessage } from "./chatCrypto.js?v=20260419a";
+} from "./crypto.js?v=20260420i";
+import { authFetch, ensureSession } from "./authClient.js?v=20260420i";
+import { encryptMessage } from "./chatCrypto.js?v=20260420i";
 import {
     bindChatHeaderControls,
     getSenderLabel,
@@ -18,21 +18,21 @@ import {
     renderMessage,
     setUserStatus,
     updateChatHeaderAvatar
-} from "./messagesUi.js?v=20260419a";
+} from "./messagesUi.js?v=20260420i";
 import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260420h";
-import { createHistoryController } from "./messagesHistory.js?v=20260420h";
+} from "./messagesSockets.js?v=20260420i";
+import { createHistoryController } from "./messagesHistory.js?v=20260420i";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260420h";
-import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420h";
+} from "./messagesChatFlow.js?v=20260420i";
+import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420i";
 
 const DEBUG_CHAT = false;
 let keysReady = false;
