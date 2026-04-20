@@ -1,5 +1,17 @@
+import pytest
+
 from app.db.models import Message
 from tests.helpers import login_user, register_user
+
+
+def test_websocket_routes_require_valid_session(client):
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/user"):
+            assert False, "Anonymous websocket connection should not stay open"
+
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/1"):
+            assert False, "Anonymous chat websocket connection should not stay open"
 
 
 def test_websocket_chat_delivery_and_message_persistence(client, second_client, db_session):
@@ -62,4 +74,77 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
         "content": message_payload,
         "historical": True,
     }
+    assert history_complete == {"type": "history_complete"}
+
+
+def test_websocket_chat_history_reconnect_preserves_order(client, second_client, db_session):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    create_chat_response = client.post("/messages/start", data={"username": "user2"})
+    assert create_chat_response.status_code == 200
+    chat_id = create_chat_response.json()["chat_id"]
+
+    message_payloads = [
+        '{"msg":"first-from-user1"}',
+        '{"msg":"second-from-user1"}',
+        '{"msg":"third-from-user1"}',
+    ]
+
+    with client.websocket_connect(f"/ws/{chat_id}") as sender_ws:
+        sender_status = sender_ws.receive_json()
+        assert sender_status["type"] == "status"
+        assert sender_ws.receive_json() == {"type": "history_complete"}
+
+        for expected_id, payload in enumerate(message_payloads, start=1):
+            sender_ws.send_text(payload)
+            echoed_message = sender_ws.receive_json()
+            assert echoed_message == {
+                "type": "message",
+                "message_id": expected_id,
+                "sender": "user1",
+                "content": payload,
+                "historical": False,
+            }
+
+    saved_messages = db_session.query(Message).filter(Message.chat_id == chat_id).order_by(Message.id).all()
+    assert [msg.content for msg in saved_messages] == message_payloads
+
+    with second_client.websocket_connect(f"/ws/{chat_id}") as reconnected_ws:
+        reconnect_status = reconnected_ws.receive_json()
+        assert reconnect_status["type"] == "status"
+
+        history_messages = [
+            reconnected_ws.receive_json(),
+            reconnected_ws.receive_json(),
+            reconnected_ws.receive_json(),
+        ]
+        history_complete = reconnected_ws.receive_json()
+
+    assert history_messages == [
+        {
+            "type": "message",
+            "message_id": 1,
+            "sender": "user1",
+            "content": message_payloads[0],
+            "historical": True,
+        },
+        {
+            "type": "message",
+            "message_id": 2,
+            "sender": "user1",
+            "content": message_payloads[1],
+            "historical": True,
+        },
+        {
+            "type": "message",
+            "message_id": 3,
+            "sender": "user1",
+            "content": message_payloads[2],
+            "historical": True,
+        },
+    ]
     assert history_complete == {"type": "history_complete"}

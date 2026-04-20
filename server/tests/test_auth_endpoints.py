@@ -73,3 +73,28 @@ def test_refresh_json_response_and_security_headers(client):
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert "camera=()" in response.headers["Permissions-Policy"]
+
+
+def test_logout_revokes_session_for_protected_routes(client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+
+    response = client.get("/users/me")
+    assert response.status_code == 200
+
+    response = client.post("/logout", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+    response = client.get("/users/me")
+    assert response.status_code == 401
+
+    response = client.post(
+        "/refresh",
+        headers={
+            "X-Requested-With": "fetch",
+            "Accept": "application/json",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 401

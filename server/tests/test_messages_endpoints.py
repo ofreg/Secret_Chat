@@ -1,6 +1,23 @@
 from tests.helpers import login_user, register_user, upload_public_key, upload_x3dh_keys
 
 
+def test_protected_message_routes_require_authentication(client):
+    protected_get_routes = [
+        ("/messages", None),
+        ("/messages/search", {"query": "user"}),
+        ("/messages/get_keys", {"chat_id": 1}),
+        ("/users/prekey-bundle", {"username": "user2"}),
+        ("/users/me", None),
+    ]
+
+    for path, params in protected_get_routes:
+        response = client.get(path, params=params)
+        assert response.status_code == 401, path
+
+    response = client.post("/messages/start", data={"username": "user2"})
+    assert response.status_code == 401
+
+
 def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert register_user(client, "user1@example.com").status_code == 303
     assert register_user(second_client, "user2@example.com").status_code == 303
