@@ -13,18 +13,33 @@ export async function updateVerificationUiFlow({
     const resetBtn = document.getElementById("resetFingerprintBtn");
     const copyBtn = document.getElementById("copyFingerprintBtn");
     const qrCanvas = document.getElementById("fingerprintQr");
+    const feedbackEl = document.getElementById("verificationFeedback");
 
     if (!statusEl || !verifyBtn || !resetBtn || !copyBtn || !qrCanvas) {
         return;
+    }
+
+    function setFeedback(message, tone = "") {
+        if (!feedbackEl) {
+            return;
+        }
+
+        feedbackEl.textContent = message;
+        feedbackEl.classList.remove("is-success", "is-error");
+        if (tone) {
+            feedbackEl.classList.add(tone);
+        }
     }
 
     const isVerified = await getVerificationStatus(fingerprint);
     statusEl.textContent = isVerified ? "Verified" : "Not verified";
     statusEl.classList.toggle("verified", isVerified);
     statusEl.classList.toggle("unverified", !isVerified);
+    setFeedback("");
 
     verifyBtn.onclick = async function () {
         await saveVerificationStatus(fingerprint, true);
+        setFeedback("Fingerprint marked as verified.", "is-success");
         await updateVerificationUiFlow({
             fingerprint,
             verificationKey,
@@ -37,6 +52,7 @@ export async function updateVerificationUiFlow({
 
     resetBtn.onclick = async function () {
         await saveVerificationStatus(fingerprint, false);
+        setFeedback("Verification status was reset.", "is-success");
         await updateVerificationUiFlow({
             fingerprint,
             verificationKey,
@@ -50,9 +66,9 @@ export async function updateVerificationUiFlow({
     copyBtn.onclick = async function () {
         try {
             await navigator.clipboard.writeText(fingerprint);
-            alert("Fingerprint copied");
+            setFeedback("Fingerprint copied to clipboard.", "is-success");
         } catch {
-            alert(fingerprint);
+            setFeedback("Could not copy automatically. Copy the fingerprint manually.", "is-error");
         }
     };
 

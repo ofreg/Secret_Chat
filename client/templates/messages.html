@@ -294,6 +294,21 @@
     max-width: 280px;
 }
 
+.safety-feedback {
+    margin-top: 10px;
+    min-height: 18px;
+    font-size: 12px;
+    color: #475569;
+}
+
+.safety-feedback.is-success {
+    color: #166534;
+}
+
+.safety-feedback.is-error {
+    color: #991b1b;
+}
+
 @media (max-width: 980px) {
     .container {
         flex-direction: column;
@@ -323,8 +338,8 @@ window.otherIdentityKey = "{{ other_identity_key }}";
 </script>
 {% endif %}
 
-<script type="module" src="/static/js/searchBootstrap.js?v=20260420i"></script>
-<script type="module" src="/static/js/messages.js?v=20260420i"></script>
+<script type="module" src="/static/js/searchBootstrap.js?v=20260421a"></script>
+<script type="module" src="/static/js/messages.js?v=20260421a"></script>
 
 <div class="container">
     <div class="sidebar">
@@ -413,6 +428,7 @@ window.otherIdentityKey = "{{ other_identity_key }}";
                             Scan or compare this QR / fingerprint with your contact on another trusted channel to reduce MITM risk.
                         </div>
                     </div>
+                    <div class="safety-feedback" id="verificationFeedback" aria-live="polite"></div>
                 </div>
             </aside>
         </div>
