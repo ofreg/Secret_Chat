@@ -23,6 +23,11 @@ import {
     setUserStatus,
     updateChatHeaderAvatar
 } from "./messagesUi.js?v=20260419a";
+import {
+    createChatSocket,
+    createUserSocket,
+    reloadChatList
+} from "./messagesSockets.js?v=20260420b";
 import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 
 const DEBUG_CHAT = false;
@@ -353,36 +358,26 @@ async function openChatSocket(chatId) {
         } catch {}
     }
 
-    const chatSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/${chatId}`);
-
-    chatSocket.onopen = function () {
-        if (DEBUG_CHAT) {
-            console.log("Chat ready:", chatId);
-        }
-        chatSocketOpened = true;
-        updateChatReadiness();
-        logChatState("chat websocket opened");
-    };
-
-    chatSocket.onmessage = async function (event) {
-        const data = JSON.parse(event.data);
-
-        if (data.type === "status") {
+    const chatSocket = createChatSocket({
+        chatId,
+        debug: DEBUG_CHAT,
+        onOpen: () => {
+            chatSocketOpened = true;
+            updateChatReadiness();
+            logChatState("chat websocket opened");
+        },
+        onStatus: (data) => {
             setUserStatus(data.is_online);
-            return;
-        }
-
-        if (data.type === "history_complete") {
+        },
+        onHistoryComplete: () => {
             historySyncInProgress = false;
             updateChatReadiness();
 
             const queuedLiveMessages = [...deferredLiveMessages];
             deferredLiveMessages = [];
             queuedLiveMessages.forEach(queueMessageProcessing);
-            return;
-        }
-
-        if (data.type === "message") {
+        },
+        onMessage: (data) => {
             if (!keysReady) {
                 if (!data.historical) {
                     logChatState("live message queued while keys are not ready", {
@@ -401,7 +396,7 @@ async function openChatSocket(chatId) {
 
             queueMessageProcessing(data);
         }
-    };
+    });
 
     window.chatSocket = chatSocket;
 }
@@ -492,54 +487,23 @@ let userSocket = null;
 const messageSound = new Audio("/static/sounds/new_message.mp3");
 
 function connectUserSocket() {
-    userSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/user`);
-
-    userSocket.onmessage = async function (event) {
-        const data = JSON.parse(event.data);
-
-        if (data.type === "new_chat") {
+    userSocket = createUserSocket({
+        debug: DEBUG_CHAT,
+        onNewChat: async () => {
             await loadChats();
-        }
-
-        if (data.type === "new_message") {
+        },
+        onNewMessage: async (data) => {
             const updatedChatId = data.chat_id;
             if (!window.location.search.includes("chat_id=" + updatedChatId)) {
                 markChatAsUpdated(updatedChatId);
                 void messageSound.play();
             }
         }
-    };
-
-    userSocket.onclose = function (event) {
-        if (DEBUG_CHAT) {
-            console.log("User WS closed", event);
-        }
-    };
+    });
 }
 
 async function loadChats() {
-    const response = await authFetch("/messages");
-    const html = await response.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, "text/html");
-
-    const newChatList = doc.querySelector("#chatList");
-    const currentChatList = document.querySelector("#chatList");
-
-    if (newChatList && currentChatList) {
-        currentChatList.innerHTML = newChatList.innerHTML;
-    }
-
-    const noChatsText = document.getElementById("noChatsText");
-    if (currentChatList.children.length > 0) {
-        if (noChatsText) noChatsText.style.display = "none";
-    } else {
-        if (noChatsText) noChatsText.style.display = "block";
-    }
-}
-
-function getWebSocketProtocol() {
-    return window.location.protocol === "https:" ? "wss" : "ws";
+    await reloadChatList(authFetch);
 }
 
 function getCurrentChatId() {
