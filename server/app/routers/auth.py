@@ -21,9 +21,12 @@ from app.utils.avatar import build_avatar_props
 from app.utils.jwt import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     create_access_token,
+    create_password_reset_token,
     create_refresh_token,
+    decode_password_reset_token,
     hash_refresh_token,
 )
+from app.utils.mail import is_mail_configured, send_password_reset_email
 from app.utils.security import hash_password, verify_password
 from app.utils.time import utc_now
 
@@ -114,6 +117,15 @@ def register_page(request: Request):
     return templates.TemplateResponse(request, "register.html", {"request": request})
 
 
+@router.get("/forgot-password", response_class=HTMLResponse)
+def forgot_password_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "forgot_password.html",
+        {"request": request, "email": "", "error": None, "message": None},
+    )
+
+
 @router.post("/register")
 def register(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
@@ -163,6 +175,116 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     return templates.TemplateResponse(request, "login.html", {"request": request})
+
+
+@router.post("/forgot-password", response_class=HTMLResponse)
+def forgot_password_submit(request: Request, email: str = Form(...)):
+    try:
+        valid_email = str(email_adapter.validate_python(email))
+    except ValidationError:
+        return templates.TemplateResponse(
+            request,
+            "forgot_password.html",
+            {"request": request, "email": email, "error": "Invalid email format", "message": None},
+            status_code=400,
+        )
+
+    if not is_mail_configured():
+        return templates.TemplateResponse(
+            request,
+            "forgot_password.html",
+            {
+                "request": request,
+                "email": valid_email,
+                "error": "Password reset email is not configured yet.",
+                "message": None,
+            },
+            status_code=503,
+        )
+
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == valid_email).first()
+    finally:
+        db.close()
+
+    if user:
+        token = create_password_reset_token(valid_email)
+        reset_link = str(request.url_for("reset_password_page")) + f"?token={token}"
+        send_password_reset_email(valid_email, reset_link)
+
+    return templates.TemplateResponse(
+        request,
+        "forgot_password.html",
+        {
+            "request": request,
+            "email": valid_email,
+            "error": None,
+            "message": "If an account with this email exists, a reset link has been sent.",
+        },
+    )
+
+
+@router.get("/reset-password", response_class=HTMLResponse, name="reset_password_page")
+def reset_password_page(request: Request, token: str = ""):
+    payload = decode_password_reset_token(token) if token else None
+    if not payload:
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {"request": request, "token": token, "error": "Reset link is invalid or expired.", "message": None},
+            status_code=400,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "reset_password.html",
+        {"request": request, "token": token, "error": None, "message": None},
+    )
+
+
+@router.post("/reset-password")
+def reset_password_submit(
+    request: Request,
+    token: str = Form(...),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    payload = decode_password_reset_token(token)
+    if not payload:
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {"request": request, "token": token, "error": "Reset link is invalid or expired.", "message": None},
+            status_code=400,
+        )
+
+    if password != confirm_password:
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {"request": request, "token": token, "error": "Passwords do not match.", "message": None},
+            status_code=400,
+        )
+
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == payload["sub"]).first()
+        if not user:
+            return templates.TemplateResponse(
+                request,
+                "reset_password.html",
+                {"request": request, "token": token, "error": "User not found.", "message": None},
+                status_code=404,
+            )
+
+        user.password = hash_password(password)
+        db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    return RedirectResponse("/login", status_code=303)
 
 
 @router.post("/login")

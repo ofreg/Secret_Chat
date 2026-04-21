@@ -106,6 +106,28 @@ pytest server/tests -q
 - `/refresh` продовжує життя існуючого refresh token, а не ротуює його на кожному запиті
 - protected HTTP routes закриті через `Depends(get_current_user)`
 - websocket routes перевіряють `access_token` з cookies перед підключенням
+- password reset працює через email reset token
+
+## Password reset email
+
+Для скидання пароля потрібно заповнити SMTP-змінні в `.env`.
+
+Для Gmail найзручніше використовувати:
+
+- `SMTP_HOST=smtp.gmail.com`
+- `SMTP_PORT=587`
+- `SMTP_USERNAME=<ваш gmail>`
+- `SMTP_PASSWORD=<app password, не звичайний пароль>`
+- `SMTP_FROM_EMAIL=<той самий gmail>`
+- `SMTP_FROM_NAME=<ім'я відправника, наприклад IT-Support>`
+- `SMTP_USE_TLS=true`
+- `MAIL_APP_NAME=<назва застосунку, наприклад Mail>`
+- `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30`
+
+У застосунку є сторінки:
+
+- `/forgot-password`
+- `/reset-password?token=...`
 
 ## E2EE / client crypto
 

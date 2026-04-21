@@ -98,3 +98,48 @@ def test_logout_revokes_session_for_protected_routes(client):
         follow_redirects=False,
     )
     assert response.status_code == 401
+
+
+def test_password_reset_flow(client, monkeypatch):
+    sent_links = []
+
+    def fake_send_password_reset_email(to_email: str, reset_link: str):
+        sent_links.append((to_email, reset_link))
+
+    monkeypatch.setattr("app.routers.auth.is_mail_configured", lambda: True)
+    monkeypatch.setattr("app.routers.auth.send_password_reset_email", fake_send_password_reset_email)
+
+    assert register_user(client, "user1@example.com").status_code == 303
+
+    response = client.get("/forgot-password")
+    assert response.status_code == 200
+
+    response = client.post("/forgot-password", data={"email": "user1@example.com"})
+    assert response.status_code == 200
+    assert sent_links
+    assert sent_links[0][0] == "user1@example.com"
+    assert "/reset-password?token=" in sent_links[0][1]
+
+    token = sent_links[0][1].split("token=", 1)[1]
+
+    response = client.get("/reset-password", params={"token": token})
+    assert response.status_code == 200
+
+    response = client.post(
+        "/reset-password",
+        data={
+            "token": token,
+            "password": "NewPassword123!",
+            "confirm_password": "NewPassword123!",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+    failed_login = login_user(client, "user1@example.com", password="Password123!")
+    assert failed_login.status_code == 400
+
+    success_login = login_user(client, "user1@example.com", password="NewPassword123!")
+    assert success_login.status_code == 303
+    assert success_login.headers["location"] == "/profile"

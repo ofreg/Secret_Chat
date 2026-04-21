@@ -9,6 +9,7 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7))
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES", 30))
 
 if not SECRET_KEY:
     raise RuntimeError("JWT_SECRET_KEY not set")
@@ -65,3 +66,24 @@ def hash_refresh_token(token: str):
     Хешує refresh token для безпечного зберігання
     """
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_password_reset_token(email: str):
+    to_encode = {
+        "sub": email,
+        "type": "password_reset",
+        "exp": utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
+    }
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_password_reset_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "password_reset":
+            return None
+        if "sub" not in payload:
+            return None
+        return payload
+    except JWTError:
+        return None
