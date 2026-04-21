@@ -223,13 +223,13 @@ textarea {
     background: var(--danger-hover);
 }
 
-.telegram-card {
+.accent-card {
     position: relative;
     overflow: hidden;
 }
 
-.telegram-card::before,
-.telegram-hero::before {
+.accent-card::before,
+.accent-hero::before {
     content: "";
     position: absolute;
     inset: -80px auto auto -80px;
@@ -240,21 +240,7 @@ textarea {
     pointer-events: none;
 }
 
-.hero-pill,
-.auth-badge {
-    display: inline-flex;
-    align-items: center;
-    width: fit-content;
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: rgba(51, 144, 236, 0.12);
-    color: #2b73b7;
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-}
-
-.telegram-feature {
+.accent-feature {
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 248, 255, 0.98));
 }

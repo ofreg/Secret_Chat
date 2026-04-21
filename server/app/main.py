@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from collections import defaultdict
 from time import time
 import os
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.routers import auth, messages
 from app.db.base import Base
@@ -25,6 +26,27 @@ app.mount(
     StaticFiles(directory=os.getenv("STATIC_DIR", "/code/client/static")),
     name="static"
 )
+
+
+def wants_html_response(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept or "*/*" in accept
+
+
+@app.exception_handler(StarletteHTTPException)
+async def handle_http_exception(request: Request, exc: StarletteHTTPException):
+    if exc.status_code in {403, 404} and wants_html_response(request):
+        return templates.TemplateResponse(
+            request,
+            f"{exc.status_code}.html",
+            {"request": request},
+            status_code=exc.status_code,
+        )
+
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+    return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
 
 
 @app.middleware("http")

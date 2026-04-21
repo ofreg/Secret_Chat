@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}403{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+    <section class="auth-card accent-card">
+        <h1 class="auth-title">Ой, а вам сюди не можна</h1>
+        <p class="auth-subtitle">
+            Схоже, ця сторінка або дія недоступна для вашого акаунта. Поверніться до профілю й продовжуйте роботу звідти.
+        </p>
+        <div class="helper-row">
+            <a href="/profile" class="primary-btn">Профіль</a>
+        </div>
+    </section>
+</div>
+{% endblock %}

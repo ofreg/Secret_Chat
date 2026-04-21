@@ -12,13 +12,14 @@
 
 .sidebar {
     width: 30%;
-    border-right: 1px solid #ccc;
-    padding: 10px;
+    border-right: 1px solid #d6e3f1;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.55);
 }
 
 .chat-area {
     width: 70%;
-    padding: 10px;
+    padding: 16px;
     display: flex;
     flex-direction: column;
 }
@@ -106,10 +107,13 @@
 
 .messages {
     flex: 1;
-    border: 1px solid #ccc;
+    border: 1px solid #d6e3f1;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #f8fbff 0%, #eef5fd 100%);
     overflow-y: auto;
-    margin-bottom: 10px;
-    padding: 5px;
+    margin-bottom: 14px;
+    padding: 10px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .chat-list {
@@ -127,13 +131,20 @@
     gap: 10px;
     padding: 10px 12px;
     border-radius: 14px;
-    background: #f8fafc;
+    background: #f7fbff;
     border: 1px solid #dbe4ee;
+    transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.chat-list-link:hover {
+    background: #edf5ff;
+    border-color: #c5d9ef;
+    transform: translateY(-1px);
 }
 
 .chat-list-link.is-active {
-    background: #e7f1ef;
-    border-color: #a7d0ca;
+    background: #e8f2ff;
+    border-color: #9dc6ef;
 }
 
 .chat-list-name {
@@ -207,6 +218,40 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+}
+
+.sidebar-title,
+.search-title {
+    margin: 0 0 12px;
+    color: #21466f;
+}
+
+.search-input {
+    width: 100%;
+    margin-bottom: 12px;
+}
+
+.chat-composer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.chat-composer-input {
+    flex: 1;
+}
+
+.chat-send-btn {
+    min-width: 146px;
+    box-shadow: 0 12px 26px rgba(51, 144, 236, 0.2);
+}
+
+.empty-chat-state {
+    padding: 22px;
+    border: 1px dashed #c3d5e7;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.7);
+    color: #5d7187;
 }
 
 .safety-card {
@@ -343,7 +388,7 @@ window.otherIdentityKey = "{{ other_identity_key }}";
 
 <div class="container">
     <div class="sidebar">
-        <h3>Ваші чати</h3>
+        <h3 class="sidebar-title">Ваші чати</h3>
 
         <ul id="chatList" class="chat-list">
             {% for chat in chats %}
@@ -366,8 +411,8 @@ window.otherIdentityKey = "{{ other_identity_key }}";
 
         <hr>
 
-        <h4>Пошук користувача</h4>
-        <input id="searchInput" placeholder="Введіть ім'я користувача">
+        <h4 class="search-title">Пошук користувача</h4>
+        <input id="searchInput" class="text-input search-input" placeholder="Введіть ім'я користувача">
         <div id="searchResults"></div>
     </div>
 
@@ -394,9 +439,9 @@ window.otherIdentityKey = "{{ other_identity_key }}";
             <div class="chat-main">
                 <div class="messages" id="chat"></div>
 
-                <div>
-                    <input id="messageInput" placeholder="Повідомлення">
-                    <button onclick="window.sendMessage()">Надіслати</button>
+                <div class="chat-composer">
+                    <input id="messageInput" class="text-input chat-composer-input" placeholder="Повідомлення">
+                    <button class="primary-btn chat-send-btn" onclick="window.sendMessage()">Надіслати</button>
                 </div>
             </div>
 
@@ -433,7 +478,7 @@ window.otherIdentityKey = "{{ other_identity_key }}";
             </aside>
         </div>
         {% else %}
-        <p>Оберіть чат або знайдіть користувача</p>
+        <p class="empty-chat-state">Оберіть чат або знайдіть користувача, щоб почати розмову.</p>
         {% endif %}
     </div>
 </div>
