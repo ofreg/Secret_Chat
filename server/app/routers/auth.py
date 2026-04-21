@@ -13,13 +13,21 @@ from pydantic import BaseModel, EmailStr, Field, TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.rate_limit import MAX_ATTEMPTS, WINDOW_SECONDS, login_attempts
-from app.db.models import OneTimePreKey, RefreshToken, User
+from app.core.rate_limit import (
+    FORGOT_PASSWORD_MAX_ATTEMPTS,
+    FORGOT_PASSWORD_WINDOW_SECONDS,
+    MAX_ATTEMPTS,
+    WINDOW_SECONDS,
+    forgot_password_attempts,
+    login_attempts,
+)
+from app.db.models import OneTimePreKey, PasswordResetToken, RefreshToken, User
 from app.db.session import SessionLocal
 from app.dependencies.auth import get_current_user
 from app.utils.avatar import build_avatar_props
 from app.utils.jwt import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES,
     create_access_token,
     create_password_reset_token,
     create_refresh_token,
@@ -179,6 +187,16 @@ def login_page(request: Request):
 
 @router.post("/forgot-password", response_class=HTMLResponse)
 def forgot_password_submit(request: Request, email: str = Form(...)):
+    ip = request.client.host
+    now = time()
+    attempts = forgot_password_attempts[ip]
+    forgot_password_attempts[ip] = [
+        attempt for attempt in attempts if now - attempt < FORGOT_PASSWORD_WINDOW_SECONDS
+    ]
+    if len(forgot_password_attempts[ip]) >= FORGOT_PASSWORD_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many password reset attempts. Try again later.")
+    forgot_password_attempts[ip].append(now)
+
     try:
         valid_email = str(email_adapter.validate_python(email))
     except ValidationError:
@@ -205,11 +223,24 @@ def forgot_password_submit(request: Request, email: str = Form(...)):
     db: Session = SessionLocal()
     try:
         user = db.query(User).filter(User.email == valid_email).first()
+        if user:
+            db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
+            token_id = secrets.token_urlsafe(32)
+            db.add(
+                PasswordResetToken(
+                    token_id=token_id,
+                    user_id=user.id,
+                    expires_at=utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
+                )
+            )
+            db.commit()
+        else:
+            token_id = None
     finally:
         db.close()
 
-    if user:
-        token = create_password_reset_token(valid_email)
+    if user and token_id:
+        token = create_password_reset_token(valid_email, token_id)
         reset_link = str(request.url_for("reset_password_page")) + f"?token={token}"
         send_password_reset_email(valid_email, reset_link)
 
@@ -278,8 +309,30 @@ def reset_password_submit(
                 status_code=404,
             )
 
+        token_record = (
+            db.query(PasswordResetToken)
+            .filter(
+                PasswordResetToken.token_id == payload["jti"],
+                PasswordResetToken.user_id == user.id,
+            )
+            .first()
+        )
+        if (
+            not token_record
+            or token_record.used_at is not None
+            or token_record.expires_at < utc_now()
+        ):
+            return templates.TemplateResponse(
+                request,
+                "reset_password.html",
+                {"request": request, "token": token, "error": "Reset link is invalid or expired.", "message": None},
+                status_code=400,
+            )
+
         user.password = hash_password(password)
         db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete()
+        token_record.used_at = utc_now()
+        db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
         db.commit()
     finally:
         db.close()

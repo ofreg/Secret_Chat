@@ -1,7 +1,35 @@
-<!DOCTYPE html>
-<html>
-<body>
-  <a href="/login">Login</a>
-  <a href="/register">Register</a>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Mail{% endblock %}
+
+{% block content %}
+<div class="page-shell">
+    <section class="hero-card telegram-hero">
+        <div class="hero-pill">Private chat workspace</div>
+        <h1 class="hero-title">Легкий інтерфейс у стилі Telegram для безпечного спілкування</h1>
+        <p class="hero-text">
+            Реєструйтесь, налаштовуйте профіль, відкривайте діалоги та працюйте з повідомленнями в єдиній синьо-світлій візуальній системі.
+        </p>
+        <div class="hero-actions">
+            <a href="/messages" class="primary-btn">Відкрити повідомлення</a>
+            <a href="/register" class="secondary-btn">Створити акаунт</a>
+        </div>
+    </section>
+
+    <section class="grid-two">
+        <article class="card feature-card telegram-feature">
+            <h3>Профіль та аватар</h3>
+            <p>
+                Завантажуйте фото профілю або використовуйте градієнтний fallback-аватар у стилі сучасних месенджерів.
+            </p>
+        </article>
+
+        <article class="card feature-card telegram-feature">
+            <h3>Безпечний доступ</h3>
+            <p>
+                Працюють відновлення пароля через email, перевірка співрозмовника та стабільна cookie-сесія.
+            </p>
+        </article>
+    </section>
+</div>
+{% endblock %}

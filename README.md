@@ -123,6 +123,8 @@ pytest server/tests -q
 - `SMTP_USE_TLS=true`
 - `MAIL_APP_NAME=<назва застосунку, наприклад Mail>`
 - `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30`
+- `FORGOT_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS=5`
+- `FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=300`
 
 У застосунку є сторінки:
 

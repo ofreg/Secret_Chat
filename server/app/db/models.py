@@ -42,6 +42,17 @@ class RefreshToken(Base):
     ip_address: Mapped[str] = mapped_column(String, nullable=True)
 
 
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_id: Mapped[str] = mapped_column(String, unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
 class Chat(Base):
     __tablename__ = "chats"
 

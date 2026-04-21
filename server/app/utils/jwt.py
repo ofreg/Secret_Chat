@@ -1,8 +1,10 @@
-import os
-from datetime import timedelta
-from jose import JWTError, jwt
-import secrets
 import hashlib
+import os
+import secrets
+from datetime import timedelta
+
+from jose import JWTError, jwt
+
 from app.utils.time import utc_now
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
@@ -68,9 +70,10 @@ def hash_refresh_token(token: str):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_password_reset_token(email: str):
+def create_password_reset_token(email: str, token_id: str):
     to_encode = {
         "sub": email,
+        "jti": token_id,
         "type": "password_reset",
         "exp": utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
     }
@@ -83,6 +86,8 @@ def decode_password_reset_token(token: str):
         if payload.get("type") != "password_reset":
             return None
         if "sub" not in payload:
+            return None
+        if "jti" not in payload:
             return None
         return payload
     except JWTError:

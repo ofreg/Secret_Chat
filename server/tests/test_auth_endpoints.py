@@ -143,3 +143,26 @@ def test_password_reset_flow(client, monkeypatch):
     success_login = login_user(client, "user1@example.com", password="NewPassword123!")
     assert success_login.status_code == 303
     assert success_login.headers["location"] == "/profile"
+
+    reused_token_response = client.post(
+        "/reset-password",
+        data={
+            "token": token,
+            "password": "AnotherPassword123!",
+            "confirm_password": "AnotherPassword123!",
+        },
+    )
+    assert reused_token_response.status_code == 400
+    assert "invalid or expired" in reused_token_response.text
+
+
+def test_forgot_password_rate_limit(client, monkeypatch):
+    monkeypatch.setattr("app.routers.auth.is_mail_configured", lambda: True)
+    monkeypatch.setattr("app.routers.auth.send_password_reset_email", lambda *_args, **_kwargs: None)
+
+    for _ in range(5):
+        response = client.post("/forgot-password", data={"email": "user1@example.com"})
+        assert response.status_code == 200
+
+    response = client.post("/forgot-password", data={"email": "user1@example.com"})
+    assert response.status_code == 429

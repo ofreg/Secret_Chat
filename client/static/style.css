@@ -1,25 +1,25 @@
 :root {
-    --bg: #f3efe7;
-    --bg-accent: #e8dfd0;
-    --surface: #fffdf8;
+    --bg: #dcecff;
+    --bg-accent: #c8ddf5;
+    --surface: #f5f9ff;
     --surface-strong: #ffffff;
-    --text: #1f2933;
-    --muted: #5b6671;
-    --line: #d9cfbf;
-    --line-strong: #c8b9a0;
-    --primary: #155e63;
-    --primary-hover: #10484c;
-    --secondary: #e7ddcf;
-    --secondary-hover: #dccdb8;
-    --danger: #a63c2f;
-    --danger-hover: #872f24;
-    --success: #20644c;
-    --warning: #9a6121;
-    --shadow: 0 18px 45px rgba(53, 42, 25, 0.12);
+    --text: #1c2b3a;
+    --muted: #5d7187;
+    --line: #d6e3f1;
+    --line-strong: #c3d5e7;
+    --primary: #3390ec;
+    --primary-hover: #237ad0;
+    --secondary: #e8f1fb;
+    --secondary-hover: #dce9f8;
+    --danger: #d0515f;
+    --danger-hover: #b84451;
+    --success: #2f9e71;
+    --warning: #c68a1f;
+    --shadow: 0 18px 55px rgba(34, 76, 122, 0.14);
     --radius: 18px;
     --radius-sm: 12px;
     --content-width: 1180px;
-    --font-ui: "Segoe UI", "Trebuchet MS", sans-serif;
+    --font-ui: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
 
 * {
@@ -31,8 +31,9 @@ body {
     margin: 0;
     min-height: 100%;
     background:
-        radial-gradient(circle at top left, rgba(255, 255, 255, 0.6), transparent 28%),
-        linear-gradient(180deg, #f7f2e9 0%, #efe6d8 100%);
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.85), transparent 24%),
+        radial-gradient(circle at right 18%, rgba(51, 144, 236, 0.14), transparent 26%),
+        linear-gradient(180deg, #eaf4ff 0%, #dcecff 100%);
     color: var(--text);
     font-family: var(--font-ui);
 }
@@ -57,9 +58,9 @@ textarea {
     position: sticky;
     top: 0;
     z-index: 20;
-    border-bottom: 1px solid rgba(200, 185, 160, 0.65);
+    border-bottom: 1px solid rgba(195, 213, 231, 0.85);
     backdrop-filter: blur(12px);
-    background: rgba(255, 250, 241, 0.86);
+    background: rgba(244, 249, 255, 0.84);
 }
 
 .nav {
@@ -73,10 +74,10 @@ textarea {
 }
 
 .logo {
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 800;
     letter-spacing: 0.02em;
-    color: #153247;
+    color: #1f466d;
 }
 
 .nav-links {
@@ -141,7 +142,7 @@ textarea {
 .profile-card,
 .panel-card {
     background: var(--surface-strong);
-    border: 1px solid rgba(201, 185, 160, 0.7);
+    border: 1px solid rgba(195, 213, 231, 0.88);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
 }
@@ -151,15 +152,15 @@ textarea {
     display: grid;
     gap: 18px;
     background:
-        radial-gradient(circle at top right, rgba(21, 94, 99, 0.08), transparent 25%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(252, 247, 240, 0.98));
+        radial-gradient(circle at top right, rgba(51, 144, 236, 0.16), transparent 24%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 250, 255, 0.98));
 }
 
 .hero-title {
     margin: 0;
     font-size: clamp(30px, 5vw, 52px);
     line-height: 1.04;
-    color: #18354a;
+    color: #193a59;
 }
 
 .hero-text {
@@ -222,6 +223,42 @@ textarea {
     background: var(--danger-hover);
 }
 
+.telegram-card {
+    position: relative;
+    overflow: hidden;
+}
+
+.telegram-card::before,
+.telegram-hero::before {
+    content: "";
+    position: absolute;
+    inset: -80px auto auto -80px;
+    width: 220px;
+    height: 220px;
+    border-radius: 999px;
+    background: radial-gradient(circle, rgba(51, 144, 236, 0.12), transparent 70%);
+    pointer-events: none;
+}
+
+.hero-pill,
+.auth-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(51, 144, 236, 0.12);
+    color: #2b73b7;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.telegram-feature {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 248, 255, 0.98));
+}
+
 .grid-two {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -236,7 +273,7 @@ textarea {
 .section-title,
 .card-title {
     margin: 0 0 10px;
-    color: #153247;
+    color: #21466f;
 }
 
 .feature-card p,
@@ -287,8 +324,8 @@ textarea {
 .text-input {
     width: 100%;
     border: 1px solid var(--line-strong);
-    border-radius: 14px;
-    background: #fff;
+    border-radius: 16px;
+    background: #f8fbff;
     padding: 13px 14px;
     color: var(--text);
     transition: border-color 0.18s ease, box-shadow 0.18s ease;
@@ -302,7 +339,13 @@ textarea {
 
 .error-text {
     margin: 0;
-    color: #a63c2f;
+    color: #b03c49;
+    font-weight: 700;
+}
+
+.success-text {
+    margin: 0;
+    color: var(--success);
     font-weight: 700;
 }
 
@@ -335,8 +378,8 @@ textarea {
     gap: 16px;
     padding: 14px 16px;
     border-radius: 14px;
-    background: #f8f2e8;
-    border: 1px solid rgba(201, 185, 160, 0.65);
+    background: #f4f8fd;
+    border: 1px solid rgba(195, 213, 231, 0.8);
 }
 
 .fact-label {
@@ -397,8 +440,8 @@ textarea {
 .page-note {
     padding: 14px 16px;
     border-radius: 14px;
-    background: #fbf6ee;
-    border: 1px solid rgba(201, 185, 160, 0.7);
+    background: #f4f8fd;
+    border: 1px solid rgba(195, 213, 231, 0.8);
     color: var(--muted);
 }
 
@@ -423,13 +466,48 @@ textarea {
     gap: 12px;
     padding: 12px 14px;
     border-radius: 14px;
-    background: #f8f2e8;
-    border: 1px solid rgba(201, 185, 160, 0.65);
+    background: #f4f8fd;
+    border: 1px solid rgba(195, 213, 231, 0.8);
 }
 
 .search-result-name {
     font-weight: 700;
     color: #244154;
+}
+
+.auth-submit {
+    margin-top: 4px;
+}
+
+.auth-links {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    color: var(--muted);
+}
+
+.auth-divider {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--line-strong);
+}
+
+.text-link {
+    color: #2b73b7;
+    font-weight: 700;
+}
+
+.text-link:hover {
+    color: var(--primary-hover);
+}
+
+.profile-card {
+    background:
+        radial-gradient(circle at top right, rgba(51, 144, 236, 0.12), transparent 26%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 249, 255, 0.98));
 }
 
 @media (max-width: 980px) {

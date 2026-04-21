@@ -1,12 +1,39 @@
-<form method="post">
-  <input name="email" type="email" required>
-  <input name="password" type="password" required>
-  <button>Login</button>
-  <div>
-    <a href="/forgot-password">Forgot password?</a>
-  </div>
-  {% if error %}
-    <div class="error">{{ error }}</div>
-  {% endif %}
+{% extends "base.html" %}
 
-</form>
+{% block title %}Логін{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+    <section class="auth-card telegram-card">
+        <div class="auth-badge">Telegram-style access</div>
+        <h1 class="auth-title">Увійти в акаунт</h1>
+        <p class="auth-subtitle">
+            Поверніться в чат, відкрийте повідомлення та продовжуйте спілкування в єдиному інтерфейсі.
+        </p>
+
+        <form method="post" class="form-stack">
+            <label class="form-label">
+                Email
+                <input class="text-input" name="email" type="email" required autocomplete="email">
+            </label>
+
+            <label class="form-label">
+                Пароль
+                <input class="text-input" name="password" type="password" required autocomplete="current-password">
+            </label>
+
+            {% if error %}
+                <p class="error-text">{{ error }}</p>
+            {% endif %}
+
+            <button type="submit" class="primary-btn auth-submit">Увійти</button>
+        </form>
+
+        <div class="auth-links">
+            <a class="text-link" href="/forgot-password">Забули пароль?</a>
+            <span class="auth-divider"></span>
+            <a class="text-link" href="/register">Створити акаунт</a>
+        </div>
+    </section>
+</div>
+{% endblock %}

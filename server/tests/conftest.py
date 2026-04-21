@@ -23,7 +23,7 @@ os.environ.setdefault("STATIC_DIR", str(CLIENT_ROOT / "static"))
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
-from app.core.rate_limit import login_attempts
+from app.core.rate_limit import forgot_password_attempts, login_attempts
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
@@ -36,6 +36,7 @@ def reset_state():
     Base.metadata.create_all(bind=engine)
 
     login_attempts.clear()
+    forgot_password_attempts.clear()
     manager.chat_connections.clear()
     manager.user_connections.clear()
     manager.online_users.clear()
