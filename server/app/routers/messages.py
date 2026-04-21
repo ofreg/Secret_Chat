@@ -1,5 +1,6 @@
 import json
 import os
+import logging
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Form, Request, WebSocket, WebSocketDisconnect
@@ -22,6 +23,7 @@ from app.utils.websocket_manager import manager
 router = APIRouter()
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
 USED_PREKEY_RETENTION_DAYS = 7
+audit_logger = logging.getLogger("app.audit")
 
 
 @router.get("/messages", response_class=HTMLResponse)
@@ -105,6 +107,7 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
         result = await db.execute(select(User).where(User.username == username))
         other_user = result.scalar_one_or_none()
         if not other_user or other_user.id == current_user.id:
+            audit_logger.warning("chat_start_failed requester_id=%s username=%s", current_user.id, username)
             return {"status": "error", "message": "Не знайдено користувача"}
 
         u1, u2 = sorted([current_user.id, other_user.id])
@@ -117,6 +120,14 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
             db.add(chat)
             await db.commit()
             await db.refresh(chat)
+            audit_logger.info("chat_created chat_id=%s user1_id=%s user2_id=%s", chat.id, u1, u2)
+        else:
+            audit_logger.info(
+                "chat_reused chat_id=%s requester_id=%s other_user_id=%s",
+                chat.id,
+                current_user.id,
+                other_user.id,
+            )
 
         return {
             "status": "ok",
@@ -135,11 +146,13 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
 async def websocket_user(websocket: WebSocket):
     token = websocket.cookies.get("access_token")
     if not token:
+        audit_logger.warning("ws_user_rejected missing_access_token")
         await websocket.close(code=1008)
         return
 
     payload = decode_access_token(token)
     if not payload:
+        audit_logger.warning("ws_user_rejected invalid_access_token")
         await websocket.close(code=1008)
         return
 
@@ -147,14 +160,17 @@ async def websocket_user(websocket: WebSocket):
         result = await db.execute(select(User).where(User.email == payload.get("sub")))
         user = result.scalar_one_or_none()
         if not user:
+            audit_logger.warning("ws_user_rejected missing_user email=%s", payload.get("sub"))
             await websocket.close(code=1008)
             return
 
+        audit_logger.info("ws_user_connected user_id=%s", user.id)
         await manager.connect_user(user.id, websocket)
         try:
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
+            audit_logger.info("ws_user_disconnected user_id=%s", user.id)
             manager.disconnect_user(user.id, websocket)
 
 
@@ -162,11 +178,13 @@ async def websocket_user(websocket: WebSocket):
 async def websocket_chat(websocket: WebSocket, chat_id: int):
     token = websocket.cookies.get("access_token")
     if not token:
+        audit_logger.warning("ws_chat_rejected missing_access_token chat_id=%s", chat_id)
         await websocket.close(code=1008)
         return
 
     payload = decode_access_token(token)
     if not payload:
+        audit_logger.warning("ws_chat_rejected invalid_access_token chat_id=%s", chat_id)
         await websocket.close(code=1008)
         return
 
@@ -174,15 +192,18 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         result = await db.execute(select(User).where(User.email == payload.get("sub")))
         user = result.scalar_one_or_none()
         if not user:
+            audit_logger.warning("ws_chat_rejected missing_user chat_id=%s email=%s", chat_id, payload.get("sub"))
             await websocket.close(code=1008)
             return
 
         result = await db.execute(select(Chat).where(Chat.id == chat_id))
         chat = result.scalar_one_or_none()
         if not chat or user.id not in [chat.user1_id, chat.user2_id]:
+            audit_logger.warning("ws_chat_rejected forbidden chat_id=%s user_id=%s", chat_id, user.id)
             await websocket.close(code=1008)
             return
 
+        audit_logger.info("ws_chat_connected chat_id=%s user_id=%s", chat_id, user.id)
         await manager.connect_chat(chat_id, websocket)
         other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
 
@@ -216,6 +237,13 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 db.add(msg)
                 await db.commit()
                 await db.refresh(msg)
+                audit_logger.info(
+                    "message_saved chat_id=%s message_id=%s sender_id=%s first_message=%s",
+                    chat_id,
+                    msg.id,
+                    user.id,
+                    is_first_message,
+                )
 
                 await manager.broadcast_chat(chat_id, {
                     "type": "message",
@@ -227,9 +255,17 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
 
                 if is_first_message:
                     await manager.notify_user(other_user_id, {"type": "new_chat"})
+                    audit_logger.info("new_chat_notified chat_id=%s recipient_user_id=%s", chat_id, other_user_id)
 
                 await manager.notify_user(other_user_id, {"type": "new_message", "chat_id": chat_id})
+                audit_logger.info(
+                    "new_message_notified chat_id=%s recipient_user_id=%s message_id=%s",
+                    chat_id,
+                    other_user_id,
+                    msg.id,
+                )
         except WebSocketDisconnect:
+            audit_logger.info("ws_chat_disconnected chat_id=%s user_id=%s", chat_id, user.id)
             manager.disconnect_chat(chat_id, websocket)
 
 

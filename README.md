@@ -173,6 +173,40 @@ Frontend crypto живе в `client/static/js`:
 - `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy`
 
+## Логи
+
+Файлове логування вже підтримується. За замовчуванням логи пишуться в:
+
+- [logs](/F:/Project/University/Diplom_work/logs)
+
+Основні файли:
+
+- `app.log` — загальні application/request логи
+- `error.log` — помилки та stack traces
+
+Крім технічних request-логів, у `app.log` тепер також пишуться audit-style події без секретів:
+
+- реєстрація
+- логін / logout / refresh
+- forgot password / password reset
+- оновлення профілю
+- завантаження ключів
+- створення чату
+- збереження повідомлень і websocket-підключення
+
+Що навмисно не логується:
+
+- паролі
+- access/refresh/reset токени
+- plaintext текст повідомлень
+
+Через `.env` можна налаштувати:
+
+- `LOG_DIR`
+- `APP_LOG_LEVEL`
+- `APP_LOG_MAX_BYTES`
+- `APP_LOG_BACKUP_COUNT`
+
 ## Поточний стан
 
 На поточному етапі стабілізовано:

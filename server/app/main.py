@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from collections import defaultdict
 from time import time
 import os
+import logging
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.routers import auth, messages
@@ -11,6 +12,7 @@ from app.db.base import Base
 from app.db.session import engine
 from sqlalchemy import inspect, text
 from fastapi.staticfiles import StaticFiles
+from app.utils.logging_config import setup_logging
 # ---------------------- Конфіг ----------------------
 login_attempts = defaultdict(list)
 MAX_ATTEMPTS = 5
@@ -18,6 +20,8 @@ WINDOW_SECONDS = 60
 
 # Абсолютний шлях всередині контейнера
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
+setup_logging()
+logger = logging.getLogger("app.main")
 
 # ---------------------- FastAPI ----------------------
 app = FastAPI()
@@ -35,6 +39,11 @@ def wants_html_response(request: Request) -> bool:
 
 @app.exception_handler(StarletteHTTPException)
 async def handle_http_exception(request: Request, exc: StarletteHTTPException):
+    if exc.status_code >= 500:
+        logger.error("HTTP error %s on %s %s", exc.status_code, request.method, request.url.path)
+    elif exc.status_code in {403, 404}:
+        logger.warning("HTTP %s on %s %s", exc.status_code, request.method, request.url.path)
+
     if exc.status_code in {403, 404} and wants_html_response(request):
         return templates.TemplateResponse(
             request,
@@ -51,13 +60,34 @@ async def handle_http_exception(request: Request, exc: StarletteHTTPException):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
+    started_at = time()
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = round((time() - started_at) * 1000, 2)
+        logger.exception(
+            "Unhandled error on %s %s (%sms)",
+            request.method,
+            request.url.path,
+            duration_ms,
+        )
+        raise
+
+    duration_ms = round((time() - started_at) * 1000, 2)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
     )
+    if not request.url.path.startswith("/static"):
+        logger.info(
+            "%s %s -> %s (%sms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
     return response
 
 # ---------------------- DB ----------------------

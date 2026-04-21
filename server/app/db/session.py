@@ -1,9 +1,15 @@
 import os
 import time
+import logging
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
+from app.utils.logging_config import setup_logging
+
+
+setup_logging()
+logger = logging.getLogger("app.db.session")
 
 DB_URL_SYNC = os.getenv("DATABASE_URL_SYNC") or (
     f"postgresql://{os.getenv('POSTGRES_USER')}:"
@@ -48,13 +54,14 @@ def wait_for_db(max_retries: int = 10, delay: int = 2):
     for attempt in range(max_retries):
         try:
             with engine.connect():
-                print("✅ Database connected")
+                logger.info("Database connected")
                 return
         except OperationalError:
-            print(f"⏳ Database not ready (attempt {attempt + 1})...")
+            logger.warning("Database not ready (attempt %s/%s)", attempt + 1, max_retries)
             time.sleep(delay)
 
-    raise RuntimeError("❌ Could not connect to database after multiple attempts")
+    logger.error("Could not connect to database after multiple attempts")
+    raise RuntimeError("Could not connect to database after multiple attempts")
 
 
 wait_for_db()

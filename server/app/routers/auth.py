@@ -1,6 +1,7 @@
 import os
 import secrets
 import uuid
+import logging
 from datetime import timedelta
 from pathlib import Path
 from time import time
@@ -48,6 +49,7 @@ COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "ye
 AVATAR_UPLOAD_DIR = Path(os.getenv("AVATAR_UPLOAD_DIR", "client/static/uploads/avatars"))
 MAX_AVATAR_SIZE_BYTES = int(os.getenv("MAX_AVATAR_SIZE_BYTES", 2 * 1024 * 1024))
 ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+audit_logger = logging.getLogger("app.audit")
 
 
 class OneTimePreKeySchema(BaseModel):
@@ -139,6 +141,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
     try:
         valid_email = str(email_adapter.validate_python(email))
     except ValidationError:
+        audit_logger.warning("register_invalid_email ip=%s email=%s", request.client.host, email)
         return templates.TemplateResponse(
             request,
             "register.html",
@@ -150,6 +153,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
     try:
         existing_user = db.query(User).filter(User.email == valid_email).first()
         if existing_user:
+            audit_logger.warning("register_duplicate ip=%s email=%s", request.client.host, valid_email)
             return templates.TemplateResponse(
                 request,
                 "register.html",
@@ -166,8 +170,10 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         db.flush()
         user.username = f"user{user.id}"
         db.commit()
+        audit_logger.info("register_success ip=%s user_id=%s email=%s", request.client.host, user.id, valid_email)
     except IntegrityError:
         db.rollback()
+        audit_logger.warning("register_integrity_error ip=%s email=%s", request.client.host, valid_email)
         return templates.TemplateResponse(
             request,
             "register.html",
@@ -194,12 +200,14 @@ def forgot_password_submit(request: Request, email: str = Form(...)):
         attempt for attempt in attempts if now - attempt < FORGOT_PASSWORD_WINDOW_SECONDS
     ]
     if len(forgot_password_attempts[ip]) >= FORGOT_PASSWORD_MAX_ATTEMPTS:
+        audit_logger.warning("forgot_password_rate_limited ip=%s", ip)
         raise HTTPException(status_code=429, detail="Too many password reset attempts. Try again later.")
     forgot_password_attempts[ip].append(now)
 
     try:
         valid_email = str(email_adapter.validate_python(email))
     except ValidationError:
+        audit_logger.warning("forgot_password_invalid_email ip=%s email=%s", ip, email)
         return templates.TemplateResponse(
             request,
             "forgot_password.html",
@@ -208,6 +216,7 @@ def forgot_password_submit(request: Request, email: str = Form(...)):
         )
 
     if not is_mail_configured():
+        audit_logger.error("forgot_password_mail_not_configured ip=%s email=%s", ip, valid_email)
         return templates.TemplateResponse(
             request,
             "forgot_password.html",
@@ -223,6 +232,7 @@ def forgot_password_submit(request: Request, email: str = Form(...)):
     db: Session = SessionLocal()
     try:
         user = db.query(User).filter(User.email == valid_email).first()
+        user_id = user.id if user else None
         if user:
             db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
             token_id = secrets.token_urlsafe(32)
@@ -243,6 +253,9 @@ def forgot_password_submit(request: Request, email: str = Form(...)):
         token = create_password_reset_token(valid_email, token_id)
         reset_link = str(request.url_for("reset_password_page")) + f"?token={token}"
         send_password_reset_email(valid_email, reset_link)
+        audit_logger.info("forgot_password_email_sent ip=%s user_id=%s email=%s", ip, user_id, valid_email)
+    else:
+        audit_logger.info("forgot_password_requested_unknown_email ip=%s email=%s", ip, valid_email)
 
     return templates.TemplateResponse(
         request,
@@ -283,6 +296,7 @@ def reset_password_submit(
 ):
     payload = decode_password_reset_token(token)
     if not payload:
+        audit_logger.warning("password_reset_invalid_token ip=%s", request.client.host)
         return templates.TemplateResponse(
             request,
             "reset_password.html",
@@ -291,6 +305,7 @@ def reset_password_submit(
         )
 
     if password != confirm_password:
+        audit_logger.warning("password_reset_mismatch ip=%s email=%s", request.client.host, payload.get("sub"))
         return templates.TemplateResponse(
             request,
             "reset_password.html",
@@ -302,6 +317,7 @@ def reset_password_submit(
     try:
         user = db.query(User).filter(User.email == payload["sub"]).first()
         if not user:
+            audit_logger.warning("password_reset_user_not_found ip=%s email=%s", request.client.host, payload.get("sub"))
             return templates.TemplateResponse(
                 request,
                 "reset_password.html",
@@ -322,6 +338,7 @@ def reset_password_submit(
             or token_record.used_at is not None
             or token_record.expires_at < utc_now()
         ):
+            audit_logger.warning("password_reset_rejected ip=%s email=%s", request.client.host, user.email)
             return templates.TemplateResponse(
                 request,
                 "reset_password.html",
@@ -334,6 +351,7 @@ def reset_password_submit(
         token_record.used_at = utc_now()
         db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
         db.commit()
+        audit_logger.info("password_reset_success ip=%s user_id=%s email=%s", request.client.host, user.id, user.email)
     finally:
         db.close()
 
@@ -348,12 +366,14 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     attempts = login_attempts[ip]
     login_attempts[ip] = [attempt for attempt in attempts if now - attempt < WINDOW_SECONDS]
     if len(login_attempts[ip]) >= MAX_ATTEMPTS:
+        audit_logger.warning("login_rate_limited ip=%s", ip)
         raise HTTPException(status_code=429, detail="Забагато спроб. Спробуйте пізніше.")
     login_attempts[ip].append(now)
 
     try:
         valid_email = str(email_adapter.validate_python(email))
     except ValidationError:
+        audit_logger.warning("login_invalid_email ip=%s email=%s", ip, email)
         return templates.TemplateResponse(
             request,
             "login.html",
@@ -365,6 +385,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
         user = db.query(User).filter(User.email == valid_email).first()
         if not user or not verify_password(password, user.password):
+            audit_logger.warning("login_failed ip=%s email=%s", ip, valid_email)
             return templates.TemplateResponse(
                 request,
                 "login.html",
@@ -387,6 +408,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
             )
         )
         db.commit()
+        audit_logger.info("login_success ip=%s user_id=%s email=%s", ip, user.id, user.email)
     finally:
         db.close()
 
@@ -413,6 +435,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
 @router.post("/refresh")
 def refresh_token_route(request: Request, refresh_token: str = Cookie(None)):
     if not refresh_token:
+        audit_logger.warning("refresh_missing_token ip=%s", request.client.host)
         raise HTTPException(status_code=401, detail="Немає refresh токена")
 
     db: Session = SessionLocal()
@@ -420,6 +443,7 @@ def refresh_token_route(request: Request, refresh_token: str = Cookie(None)):
         hashed_refresh = hash_refresh_token(refresh_token)
         token_record = db.query(RefreshToken).filter(RefreshToken.token == hashed_refresh).first()
         if not token_record or token_record.expires_at < utc_now():
+            audit_logger.warning("refresh_invalid_token ip=%s", request.client.host)
             raise HTTPException(status_code=401, detail="Недійсний refresh токен")
 
         user_agent = request.headers.get("user-agent")
@@ -427,18 +451,21 @@ def refresh_token_route(request: Request, refresh_token: str = Cookie(None)):
         if token_record.user_agent != user_agent or token_record.ip_address != ip_address:
             db.delete(token_record)
             db.commit()
+            audit_logger.warning("refresh_device_mismatch ip=%s token_user_id=%s", request.client.host, token_record.user_id)
             raise HTTPException(status_code=401, detail="Device mismatch")
 
         user = db.query(User).filter(User.id == token_record.user_id).first()
         if not user:
             db.delete(token_record)
             db.commit()
+            audit_logger.warning("refresh_user_missing ip=%s user_id=%s", request.client.host, token_record.user_id)
             raise HTTPException(status_code=401, detail="Користувач не існує")
 
         ensure_account_instance_id(user, db)
         user_email = user.email
         token_record.expires_at = utc_now() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
         db.commit()
+        audit_logger.info("refresh_success ip=%s user_id=%s email=%s", request.client.host, user.id, user.email)
     finally:
         db.close()
 
@@ -472,8 +499,11 @@ def logout(refresh_token: str = Cookie(None)):
     db: Session = SessionLocal()
     try:
         if refresh_token:
-            db.query(RefreshToken).filter(RefreshToken.token == hash_refresh_token(refresh_token)).delete()
+            deleted = db.query(RefreshToken).filter(RefreshToken.token == hash_refresh_token(refresh_token)).delete()
             db.commit()
+            audit_logger.info("logout token_deleted=%s", deleted)
+        else:
+            audit_logger.info("logout_without_refresh_cookie")
     finally:
         db.close()
 
@@ -499,6 +529,7 @@ def update_profile(
     try:
         existing_user = db.query(User).filter(User.username == name).first()
         if existing_user and existing_user.id != current_user.id:
+            audit_logger.warning("profile_update_duplicate_name user_id=%s attempted_name=%s", current_user.id, name)
             return render_profile_page(
                 request,
                 current_user,
@@ -517,11 +548,14 @@ def update_profile(
             user.avatar_filename = new_avatar_filename
             db.commit()
             remove_avatar_file(old_avatar_filename)
+            audit_logger.info("profile_avatar_updated user_id=%s", user.id)
             return RedirectResponse("/profile", status_code=303)
 
         db.commit()
+        audit_logger.info("profile_updated user_id=%s", user.id)
     except ValueError as exc:
         db.rollback()
+        audit_logger.warning("profile_update_invalid_avatar user_id=%s", current_user.id)
         return render_profile_page(request, current_user, error=str(exc), name_override=name)
     finally:
         db.close()
@@ -539,6 +573,7 @@ def upload_keys(data: PublicKeySchema, current_user: User = Depends(get_current_
 
         user.public_key = data.public_key
         db.commit()
+        audit_logger.info("legacy_keys_uploaded user_id=%s", user.id)
     finally:
         db.close()
 
@@ -571,8 +606,10 @@ def upload_x3dh_keys(data: PublicKeySchema, current_user: User = Depends(get_cur
             )
 
         db.commit()
+        audit_logger.info("x3dh_keys_uploaded user_id=%s one_time_prekeys=%s", user.id, len(data.one_time_prekeys))
     except Exception as exc:
         db.rollback()
+        audit_logger.exception("x3dh_keys_upload_failed user_id=%s", current_user.id)
         return {"status": "error", "message": str(exc)}
     finally:
         db.close()
