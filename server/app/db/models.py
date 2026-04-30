@@ -82,6 +82,8 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    delivered_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
 
 class OneTimePreKey(Base):

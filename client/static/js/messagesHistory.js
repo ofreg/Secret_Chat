@@ -188,7 +188,11 @@ export function createHistoryController({
         }
 
         if (isHistorical && messageId && messageId <= lastSeenMessageId && cachedText) {
-            renderChatMessage(chat, getSenderLabel(data.sender), cachedText);
+            renderChatMessage(chat, getSenderLabel(data.sender), cachedText, {
+                messageId,
+                deliveryStatus: data.delivery_status,
+                isOwnMessage
+            });
             renderedMessageIds.add(messageId);
             return;
         }
@@ -216,7 +220,11 @@ export function createHistoryController({
                 renderedMessageIds.add(messageId);
             }
 
-            renderChatMessage(chat, getSenderLabel(data.sender), text);
+            renderChatMessage(chat, getSenderLabel(data.sender), text, {
+                messageId,
+                deliveryStatus: data.delivery_status,
+                isOwnMessage
+            });
         } catch (err) {
             console.warn("Decrypt error:", err);
             const fallbackText = encryptedPayload
@@ -227,7 +235,11 @@ export function createHistoryController({
                 renderedMessageIds.add(messageId);
             }
 
-            renderChatMessage(chat, getSenderLabel(data.sender), fallbackText);
+            renderChatMessage(chat, getSenderLabel(data.sender), fallbackText, {
+                messageId,
+                deliveryStatus: data.delivery_status,
+                isOwnMessage
+            });
         }
     }
 

@@ -62,3 +62,9 @@
 </div>
 
 {% endblock %}
+
+{% block scripts %}
+{% if init_keys %}
+<script type="module" src="/static/js/profileBootstrap.js?v=20260430a"></script>
+{% endif %}
+{% endblock %}

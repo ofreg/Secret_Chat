@@ -99,17 +99,20 @@ ensure_schema_sql = [
     ("users", "signed_prekey", "ALTER TABLE users ADD COLUMN signed_prekey TEXT"),
     ("users", "signed_prekey_signature", "ALTER TABLE users ADD COLUMN signed_prekey_signature TEXT"),
     ("users", "signed_prekey_key_id", "ALTER TABLE users ADD COLUMN signed_prekey_key_id INTEGER"),
+    ("messages", "delivered_at", "ALTER TABLE messages ADD COLUMN delivered_at DATETIME"),
+    ("messages", "read_at", "ALTER TABLE messages ADD COLUMN read_at DATETIME"),
 ]
 
 inspector = inspect(engine)
 existing_tables = set(inspector.get_table_names())
 
 with engine.begin() as connection:
-    if "users" in existing_tables:
-        existing_user_columns = {column["name"] for column in inspector.get_columns("users")}
-        for table_name, column_name, ddl in ensure_schema_sql:
-            if column_name not in existing_user_columns:
-                connection.execute(text(ddl))
+    for table_name, column_name, ddl in ensure_schema_sql:
+        if table_name not in existing_tables:
+            continue
+        existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if column_name not in existing_columns:
+            connection.execute(text(ddl))
 
 Base.metadata.create_all(bind=engine)
 

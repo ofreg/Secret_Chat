@@ -16,9 +16,11 @@ import {
     getSenderLabel,
     markChatAsUpdated,
     renderMessage,
+    resetRenderedMessages,
     setUserStatus,
+    updateMessageStatus,
     updateChatHeaderAvatar
-} from "./messagesUi.js?v=20260420i";
+} from "./messagesUi.js?v=20260430a";
 import {
     createChatSocket,
     createUserSocket,
@@ -288,6 +290,7 @@ async function openChatSocket(chatId) {
     historySyncInProgress = true;
     deferredLiveMessages = [];
     historyController.reset();
+    resetRenderedMessages();
 
     await deleteRatchetState(chatId);
     logChatState("cleared local ratchet state before websocket history sync", { chatId });
@@ -323,6 +326,11 @@ async function openChatSocket(chatId) {
             queuedLiveMessages.forEach(historyController.queueMessageProcessing);
         },
         onMessage: (data) => {
+            if (data.type === "message_status") {
+                updateMessageStatus(data.message_id, data.delivery_status);
+                return;
+            }
+
             if (!keysReady) {
                 if (!data.historical) {
                     logChatState("live message queued while keys are not ready", {

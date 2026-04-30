@@ -26,6 +26,104 @@ USED_PREKEY_RETENTION_DAYS = 7
 audit_logger = logging.getLogger("app.audit")
 
 
+def get_delivery_status(message: Message) -> str:
+    if message.read_at:
+        return "read"
+    if message.delivered_at:
+        return "delivered"
+    return "sent"
+
+
+def serialize_message(message: Message, sender_name: str, *, historical: bool) -> dict:
+    return {
+        "type": "message",
+        "message_id": message.id,
+        "sender": sender_name,
+        "content": message.content,
+        "historical": historical,
+        "delivery_status": get_delivery_status(message),
+    }
+
+
+def build_message_status_event(message: Message) -> dict:
+    return {
+        "type": "message_status",
+        "message_id": message.id,
+        "delivery_status": get_delivery_status(message),
+    }
+
+
+async def notify_message_status(db: AsyncSession, messages: list[Message]):
+    if not messages:
+        return
+
+    for message in messages:
+        result = await db.execute(select(Chat).where(Chat.id == message.chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat:
+            continue
+
+        await manager.broadcast_chat(message.chat_id, build_message_status_event(message))
+
+        sender_id = message.sender_id
+        recipient_id = chat.user2_id if sender_id == chat.user1_id else chat.user1_id
+        await manager.notify_user(sender_id, build_message_status_event(message))
+        await manager.notify_user(recipient_id, build_message_status_event(message))
+
+
+async def mark_messages_delivered_for_user(user_id: int, db: AsyncSession) -> list[Message]:
+    result = await db.execute(
+        select(Message, Chat)
+        .join(Chat, Chat.id == Message.chat_id)
+        .where(
+            Message.sender_id != user_id,
+            Message.delivered_at.is_(None),
+            or_(Chat.user1_id == user_id, Chat.user2_id == user_id),
+        )
+    )
+
+    updated_messages = []
+    now = utc_now()
+    for message, _chat in result.all():
+        message.delivered_at = now
+        updated_messages.append(message)
+
+    if updated_messages:
+        await db.commit()
+        for message in updated_messages:
+            await db.refresh(message)
+
+    return updated_messages
+
+
+async def mark_chat_messages_read(chat_id: int, user_id: int, db: AsyncSession) -> list[Message]:
+    result = await db.execute(
+        select(Message)
+        .where(
+            Message.chat_id == chat_id,
+            Message.sender_id != user_id,
+            Message.read_at.is_(None),
+        )
+        .order_by(Message.created_at)
+    )
+    messages = result.scalars().all()
+
+    if not messages:
+        return []
+
+    now = utc_now()
+    for message in messages:
+        if message.delivered_at is None:
+            message.delivered_at = now
+        message.read_at = now
+
+    await db.commit()
+    for message in messages:
+        await db.refresh(message)
+
+    return messages
+
+
 @router.get("/messages", response_class=HTMLResponse)
 def messages_page(request: Request, current_user: User = Depends(get_current_user)):
     db: Session = SessionLocal()
@@ -166,6 +264,8 @@ async def websocket_user(websocket: WebSocket):
 
         audit_logger.info("ws_user_connected user_id=%s", user.id)
         await manager.connect_user(user.id, websocket)
+        updated_messages = await mark_messages_delivered_for_user(user.id, db)
+        await notify_message_status(db, updated_messages)
         try:
             while True:
                 await websocket.receive_text()
@@ -204,7 +304,7 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
             return
 
         audit_logger.info("ws_chat_connected chat_id=%s user_id=%s", chat_id, user.id)
-        await manager.connect_chat(chat_id, websocket)
+        await manager.connect_chat(chat_id, user.id, websocket)
         other_user_id = chat.user2_id if user.id == chat.user1_id else chat.user1_id
 
         await websocket.send_text(json.dumps({
@@ -213,16 +313,15 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
             "is_online": manager.is_online(other_user_id),
         }))
 
+        updated_messages = await mark_chat_messages_read(chat_id, user.id, db)
+        await notify_message_status(db, updated_messages)
+
         result = await db.execute(select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at))
         messages = result.scalars().all()
         for msg in messages:
-            await websocket.send_text(json.dumps({
-                "type": "message",
-                "message_id": msg.id,
-                "sender": await get_username(msg.sender_id, db),
-                "content": msg.content,
-                "historical": True,
-            }))
+            await websocket.send_text(json.dumps(
+                serialize_message(msg, await get_username(msg.sender_id, db), historical=True)
+            ))
 
         await websocket.send_text(json.dumps({"type": "history_complete"}))
 
@@ -233,7 +332,15 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 result = await db.execute(select(Message.id).where(Message.chat_id == chat_id).limit(1))
                 is_first_message = result.scalar_one_or_none() is None
 
-                msg = Message(chat_id=chat_id, sender_id=user.id, content=data)
+                delivered_at = utc_now() if manager.is_online(other_user_id) else None
+                read_at = delivered_at if manager.has_chat_user(chat_id, other_user_id) else None
+                msg = Message(
+                    chat_id=chat_id,
+                    sender_id=user.id,
+                    content=data,
+                    delivered_at=delivered_at,
+                    read_at=read_at,
+                )
                 db.add(msg)
                 await db.commit()
                 await db.refresh(msg)
@@ -245,19 +352,17 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                     is_first_message,
                 )
 
-                await manager.broadcast_chat(chat_id, {
-                    "type": "message",
-                    "message_id": msg.id,
-                    "sender": user.username,
-                    "content": data,
-                    "historical": False,
-                })
+                await manager.broadcast_chat(
+                    chat_id,
+                    serialize_message(msg, user.username, historical=False)
+                )
 
                 if is_first_message:
                     await manager.notify_user(other_user_id, {"type": "new_chat"})
                     audit_logger.info("new_chat_notified chat_id=%s recipient_user_id=%s", chat_id, other_user_id)
 
                 await manager.notify_user(other_user_id, {"type": "new_message", "chat_id": chat_id})
+                await notify_message_status(db, [msg])
                 audit_logger.info(
                     "new_message_notified chat_id=%s recipient_user_id=%s message_id=%s",
                     chat_id,
@@ -266,7 +371,7 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 )
         except WebSocketDisconnect:
             audit_logger.info("ws_chat_disconnected chat_id=%s user_id=%s", chat_id, user.id)
-            manager.disconnect_chat(chat_id, websocket)
+            manager.disconnect_chat(chat_id, websocket, user.id)
 
 
 async def get_username(user_id: int, db: AsyncSession):

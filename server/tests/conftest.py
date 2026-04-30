@@ -38,12 +38,14 @@ def reset_state():
     login_attempts.clear()
     forgot_password_attempts.clear()
     manager.chat_connections.clear()
+    manager.chat_user_connections.clear()
     manager.user_connections.clear()
     manager.online_users.clear()
 
     yield
 
     manager.chat_connections.clear()
+    manager.chat_user_connections.clear()
     manager.user_connections.clear()
     manager.online_users.clear()
     app.dependency_overrides.clear()

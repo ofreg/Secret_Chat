@@ -6,25 +6,17 @@ import json
 
 class ConnectionManager:
     def __init__(self):
-        # chat_id -> список websocket (відкриті чати)
         self.chat_connections: Dict[int, List[WebSocket]] = {}
-
-        # user_id -> список websocket (меню /ws/user)
+        self.chat_user_connections: Dict[int, Dict[int, List[WebSocket]]] = {}
         self.user_connections: Dict[int, List[WebSocket]] = {}
-
-        # онлайн користувачі
         self.online_users: set[int] = set()
-
-    # -------- SAFE SEND (🔥 порада №2) --------
 
     async def safe_send(self, websocket: WebSocket, data: dict):
         try:
             await websocket.send_text(json.dumps(data))
             return True
-        except:
+        except Exception:
             return False
-
-    # -------- USER SOCKET --------
 
     async def connect_user(self, user_id: int, websocket: WebSocket):
         await websocket.accept()
@@ -34,7 +26,6 @@ class ConnectionManager:
 
         self.user_connections[user_id].append(websocket)
 
-        # якщо це перша вкладка — користувач став онлайн
         if len(self.user_connections[user_id]) == 1:
             self.online_users.add(user_id)
             await self.broadcast_user_status(user_id, True)
@@ -44,14 +35,10 @@ class ConnectionManager:
             if websocket in self.user_connections[user_id]:
                 self.user_connections[user_id].remove(websocket)
 
-            # якщо вкладок більше нема — офлайн
             if not self.user_connections[user_id]:
                 self.user_connections.pop(user_id)
                 self.online_users.discard(user_id)
-
-                asyncio.create_task(
-                    self.broadcast_user_status(user_id, False)
-                )
+                asyncio.create_task(self.broadcast_user_status(user_id, False))
 
     def is_online(self, user_id: int) -> bool:
         return user_id in self.online_users
@@ -62,17 +49,20 @@ class ConnectionManager:
             if not ok:
                 self.disconnect_user(user_id, websocket)
 
-    # -------- CHAT SOCKET --------
-
-    async def connect_chat(self, chat_id: int, websocket: WebSocket):
+    async def connect_chat(self, chat_id: int, user_id: int, websocket: WebSocket):
         await websocket.accept()
 
         if chat_id not in self.chat_connections:
             self.chat_connections[chat_id] = []
+        if chat_id not in self.chat_user_connections:
+            self.chat_user_connections[chat_id] = {}
+        if user_id not in self.chat_user_connections[chat_id]:
+            self.chat_user_connections[chat_id][user_id] = []
 
         self.chat_connections[chat_id].append(websocket)
+        self.chat_user_connections[chat_id][user_id].append(websocket)
 
-    def disconnect_chat(self, chat_id: int, websocket: WebSocket):
+    def disconnect_chat(self, chat_id: int, websocket: WebSocket, user_id: int | None = None):
         if chat_id in self.chat_connections:
             if websocket in self.chat_connections[chat_id]:
                 self.chat_connections[chat_id].remove(websocket)
@@ -80,16 +70,25 @@ class ConnectionManager:
             if not self.chat_connections[chat_id]:
                 self.chat_connections.pop(chat_id)
 
+        if user_id is not None and chat_id in self.chat_user_connections:
+            user_sockets = self.chat_user_connections[chat_id].get(user_id, [])
+            if websocket in user_sockets:
+                user_sockets.remove(websocket)
+            if not user_sockets and user_id in self.chat_user_connections[chat_id]:
+                self.chat_user_connections[chat_id].pop(user_id)
+            if not self.chat_user_connections[chat_id]:
+                self.chat_user_connections.pop(chat_id)
+
+    def has_chat_user(self, chat_id: int, user_id: int) -> bool:
+        return bool(self.chat_user_connections.get(chat_id, {}).get(user_id))
+
     async def broadcast_chat(self, chat_id: int, data: dict):
         for connection in list(self.chat_connections.get(chat_id, [])):
             ok = await self.safe_send(connection, data)
             if not ok:
                 self.disconnect_chat(chat_id, connection)
 
-    # -------- STATUS BROADCAST --------
-
     async def broadcast_user_status(self, user_id: int, is_online: bool):
-
         data = {
             "type": "status",
             "user_id": user_id,
@@ -98,26 +97,20 @@ class ConnectionManager:
 
         tasks = []
 
-        # меню
         for uid in list(self.user_connections.keys()):
             if uid != user_id:
                 tasks.append(self.notify_user(uid, data))
 
-        # відкриті чати
         for chat_id, sockets in list(self.chat_connections.items()):
             for ws in list(sockets):
-
                 async def send(ws=ws, chat_id=chat_id):
                     ok = await self.safe_send(ws, data)
                     if not ok:
                         self.disconnect_chat(chat_id, ws)
-
                 tasks.append(send())
 
-        # 🔥 порада №1 — не блокуємо event loop
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
 
-# 🔥 ГОЛОВНЕ — один глобальний manager
 manager = ConnectionManager()

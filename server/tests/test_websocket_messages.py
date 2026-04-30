@@ -4,6 +4,13 @@ from app.db.models import Message
 from tests.helpers import login_user, register_user
 
 
+def receive_until_type(websocket, expected_type: str):
+    while True:
+        payload = websocket.receive_json()
+        if payload.get("type") == expected_type:
+            return payload
+
+
 def test_websocket_routes_require_valid_session(client):
     with pytest.raises(Exception):
         with client.websocket_connect("/ws/user"):
@@ -41,8 +48,8 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
 
                 sender_ws.send_text(message_payload)
 
-                sender_message = sender_ws.receive_json()
-                receiver_message = receiver_ws.receive_json()
+                sender_message = receive_until_type(sender_ws, "message")
+                receiver_message = receive_until_type(receiver_ws, "message")
                 first_notification = user_ws.receive_json()
                 second_notification = user_ws.receive_json()
 
@@ -52,6 +59,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
         "sender": "user1",
         "content": message_payload,
         "historical": False,
+        "delivery_status": "read",
     }
     assert receiver_message == sender_message
     assert first_notification == {"type": "new_chat"}
@@ -60,10 +68,12 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
     saved_message = db_session.query(Message).filter(Message.chat_id == chat_id).one()
     assert saved_message.sender_id == 1
     assert saved_message.content == message_payload
+    assert saved_message.delivered_at is not None
+    assert saved_message.read_at is not None
 
     with second_client.websocket_connect(f"/ws/{chat_id}") as history_ws:
         history_status = history_ws.receive_json()
-        history_message = history_ws.receive_json()
+        history_message = receive_until_type(history_ws, "message")
         history_complete = history_ws.receive_json()
 
     assert history_status["type"] == "status"
@@ -73,6 +83,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
         "sender": "user1",
         "content": message_payload,
         "historical": True,
+        "delivery_status": "read",
     }
     assert history_complete == {"type": "history_complete"}
 
@@ -101,26 +112,29 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
 
         for expected_id, payload in enumerate(message_payloads, start=1):
             sender_ws.send_text(payload)
-            echoed_message = sender_ws.receive_json()
+            echoed_message = receive_until_type(sender_ws, "message")
             assert echoed_message == {
                 "type": "message",
                 "message_id": expected_id,
                 "sender": "user1",
                 "content": payload,
                 "historical": False,
+                "delivery_status": "sent",
             }
 
     saved_messages = db_session.query(Message).filter(Message.chat_id == chat_id).order_by(Message.id).all()
     assert [msg.content for msg in saved_messages] == message_payloads
+    assert all(msg.delivered_at is None for msg in saved_messages)
+    assert all(msg.read_at is None for msg in saved_messages)
 
     with second_client.websocket_connect(f"/ws/{chat_id}") as reconnected_ws:
         reconnect_status = reconnected_ws.receive_json()
         assert reconnect_status["type"] == "status"
 
         history_messages = [
-            reconnected_ws.receive_json(),
-            reconnected_ws.receive_json(),
-            reconnected_ws.receive_json(),
+            receive_until_type(reconnected_ws, "message"),
+            receive_until_type(reconnected_ws, "message"),
+            receive_until_type(reconnected_ws, "message"),
         ]
         history_complete = reconnected_ws.receive_json()
 
@@ -131,6 +145,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
             "sender": "user1",
             "content": message_payloads[0],
             "historical": True,
+            "delivery_status": "read",
         },
         {
             "type": "message",
@@ -138,6 +153,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
             "sender": "user1",
             "content": message_payloads[1],
             "historical": True,
+            "delivery_status": "read",
         },
         {
             "type": "message",
@@ -145,6 +161,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
             "sender": "user1",
             "content": message_payloads[2],
             "historical": True,
+            "delivery_status": "read",
         },
     ]
     assert history_complete == {"type": "history_complete"}
