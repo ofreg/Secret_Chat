@@ -255,9 +255,19 @@
 }
 
 .message-status {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 12px;
+    margin-left: 2px;
+    vertical-align: baseline;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
+    font-size: 0;
+    line-height: 1;
 }
 
 .message-status.is-sent,
@@ -267,6 +277,33 @@
 
 .message-status.is-read {
     color: #3390ec;
+}
+
+.message-status::before,
+.message-status::after {
+    position: absolute;
+    top: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    transform: translateY(-52%);
+}
+
+.message-status.is-sent::before {
+    content: "✓";
+    left: 4px;
+}
+
+.message-status.is-delivered::before,
+.message-status.is-read::before {
+    content: "✓";
+    left: 1px;
+}
+
+.message-status.is-delivered::after,
+.message-status.is-read::after {
+    content: "✓";
+    left: 6px;
 }
 
 .safety-card {

@@ -19,6 +19,12 @@ function getStatusGlyph(status) {
     return "\u2713";
 }
 
+function getStatusLabel(status) {
+    if (status === "read") return "Read";
+    if (status === "delivered") return "Delivered";
+    return "Sent";
+}
+
 function getStatusClass(status) {
     if (status === "read") return "message-status is-read";
     if (status === "delivered") return "message-status is-delivered";
@@ -79,7 +85,9 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         status.className = getStatusClass(effectiveStatus);
         status.dataset.messageStatusFor = String(messageId);
         status.dataset.deliveryStatus = effectiveStatus;
-        status.textContent = getStatusGlyph(effectiveStatus);
+        status.setAttribute("aria-label", getStatusLabel(effectiveStatus));
+        status.title = getStatusLabel(effectiveStatus);
+        status.textContent = "";
         div.appendChild(document.createTextNode(" "));
         div.appendChild(status);
         pendingMessageStatuses.delete(messageId);
@@ -118,7 +126,9 @@ export function updateMessageStatus(messageId, status) {
 
     statusNode.dataset.deliveryStatus = nextStatus;
     statusNode.className = getStatusClass(nextStatus);
-    statusNode.textContent = getStatusGlyph(nextStatus);
+    statusNode.setAttribute("aria-label", getStatusLabel(nextStatus));
+    statusNode.title = getStatusLabel(nextStatus);
+    statusNode.textContent = "";
     pendingMessageStatuses.delete(messageId);
 }
 
