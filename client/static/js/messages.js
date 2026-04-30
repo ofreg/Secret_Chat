@@ -25,7 +25,7 @@ import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260420i";
+} from "./messagesSockets.js?v=20260430b";
 import { createHistoryController } from "./messagesHistory.js?v=20260420i";
 import {
     applyChatKeysFlow,
@@ -388,6 +388,9 @@ function connectUserSocket() {
                 markChatAsUpdated(updatedChatId);
                 void messageSound.play();
             }
+        },
+        onMessageStatus: async (data) => {
+            updateMessageStatus(data.message_id, data.delivery_status);
         }
     });
 }

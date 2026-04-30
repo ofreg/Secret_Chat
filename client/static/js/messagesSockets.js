@@ -32,7 +32,7 @@ export function createChatSocket({
             return;
         }
 
-        if (data.type === "message") {
+        if (data.type === "message" || data.type === "message_status") {
             onMessage?.(data);
         }
     };
@@ -43,7 +43,8 @@ export function createChatSocket({
 export function createUserSocket({
     debug = false,
     onNewChat,
-    onNewMessage
+    onNewMessage,
+    onMessageStatus
 }) {
     const userSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/user`);
 
@@ -57,6 +58,11 @@ export function createUserSocket({
 
         if (data.type === "new_message") {
             await onNewMessage?.(data);
+            return;
+        }
+
+        if (data.type === "message_status") {
+            await onMessageStatus?.(data);
         }
     };
 
