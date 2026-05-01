@@ -299,17 +299,55 @@ export function updateAttachmentComposerState(file) {
 
 export function setAttachmentFeedback(message = "", tone = "") {
     const feedback = document.getElementById("attachmentFeedback");
-    if (!feedback) {
+    const popup = document.getElementById("attachmentAlert");
+    const popupBody = document.getElementById("attachmentAlertBody");
+
+    if (!feedback && !popup) {
         return;
     }
 
-    feedback.textContent = message;
-    feedback.className = "attachment-feedback";
-    if (tone === "error") {
-        feedback.classList.add("is-error");
-    } else if (tone === "success") {
-        feedback.classList.add("is-success");
+    if (feedback) {
+        feedback.textContent = message;
+        feedback.className = "attachment-feedback";
+        if (tone === "error") {
+            feedback.classList.add("is-error");
+        } else if (tone === "success") {
+            feedback.classList.add("is-success");
+        }
     }
+
+    if (!popup || !popupBody) {
+        return;
+    }
+
+    if (!message) {
+        popup.hidden = true;
+        popupBody.textContent = "";
+        popup.className = "attachment-alert";
+        return;
+    }
+
+    popup.hidden = false;
+    popupBody.textContent = message;
+    popup.className = "attachment-alert";
+    if (tone === "error") {
+        popup.classList.add("is-error");
+    } else if (tone === "success") {
+        popup.classList.add("is-success");
+    }
+}
+
+export function bindAttachmentAlertControls() {
+    const popup = document.getElementById("attachmentAlert");
+    const closeBtn = document.getElementById("attachmentAlertClose");
+
+    if (!popup || !closeBtn) {
+        return;
+    }
+
+    closeBtn.onclick = () => {
+        popup.hidden = true;
+    };
 }
 
 export function getSenderLabel(senderName, myUsername) {

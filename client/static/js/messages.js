@@ -13,6 +13,7 @@ import { authFetch, ensureSession } from "./authClient.js?v=20260420i";
 import { encryptMessage } from "./chatCrypto.js?v=20260420i";
 import {
     bindMediaViewerControls,
+    bindAttachmentAlertControls,
     bindChatHeaderControls,
     getSenderLabel,
     markChatAsUpdated,
@@ -156,6 +157,7 @@ window.addEventListener("load", async function () {
 
     bindChatHeaderControls();
     bindMediaViewerControls();
+    bindAttachmentAlertControls();
     connectUserSocket();
 
     const attachmentInput = document.getElementById("messageAttachmentInput");

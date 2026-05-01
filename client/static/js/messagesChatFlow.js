@@ -1,3 +1,15 @@
+const MAX_ATTACHMENT_SIZE_BYTES = 50 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
+    ".jpg", ".jpeg", ".png", ".webp", ".gif",
+    ".mp4", ".webm", ".mov",
+    ".mp3", ".wav", ".ogg", ".m4a"
+]);
+
+function getFileExtension(filename = "") {
+    const dotIndex = filename.lastIndexOf(".");
+    return dotIndex >= 0 ? filename.slice(dotIndex).toLowerCase() : "";
+}
+
 export async function sendCurrentMessage({
     awaitCryptoBootstrap,
     getCurrentChatId,
@@ -44,6 +56,17 @@ export async function sendCurrentMessage({
     }
 
     if (selectedFile) {
+        const extension = getFileExtension(selectedFile.name);
+        if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
+            setAttachmentFeedback?.("Цей формат файлу не підтримується. Дозволені: JPG, PNG, WEBP, GIF, MP4, WEBM, MOV, MP3, WAV, OGG, M4A.", "error");
+            return;
+        }
+
+        if (selectedFile.size > MAX_ATTACHMENT_SIZE_BYTES) {
+            setAttachmentFeedback?.("Файл завеликий. Максимальний розмір: 50 MB.", "error");
+            return;
+        }
+
         try {
             setAttachmentFeedback?.("Uploading media...", "success");
             const formData = new FormData();

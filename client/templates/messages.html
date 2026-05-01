@@ -350,6 +350,50 @@
     color: #166534;
 }
 
+.attachment-alert {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 70;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: min(380px, calc(100vw - 32px));
+    padding: 14px 16px;
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.94);
+    color: #e2e8f0;
+    box-shadow: 0 22px 40px rgba(15, 23, 42, 0.32);
+}
+
+.attachment-alert[hidden] {
+    display: none;
+}
+
+.attachment-alert.is-error {
+    background: rgba(127, 29, 29, 0.96);
+}
+
+.attachment-alert.is-success {
+    background: rgba(21, 94, 55, 0.96);
+}
+
+.attachment-alert-body {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.attachment-alert-close {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+}
+
 .empty-chat-state {
     padding: 22px;
     border: 1px dashed #c3d5e7;
@@ -780,6 +824,11 @@ window.otherIdentityKey = "{{ other_identity_key }}";
         <img id="mediaViewerImage" class="media-viewer-image" alt="Перегляд зображення" hidden>
         <video id="mediaViewerVideo" class="media-viewer-video" controls playsinline hidden></video>
     </div>
+</div>
+
+<div id="attachmentAlert" class="attachment-alert" hidden>
+    <div id="attachmentAlertBody" class="attachment-alert-body"></div>
+    <button id="attachmentAlertClose" class="attachment-alert-close" type="button" aria-label="Закрити повідомлення">×</button>
 </div>
 
 {% endblock %}

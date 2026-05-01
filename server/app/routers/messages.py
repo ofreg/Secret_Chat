@@ -26,7 +26,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
 USED_PREKEY_RETENTION_DAYS = 7
 MESSAGE_UPLOAD_DIR = Path(os.getenv("MESSAGE_UPLOAD_DIR", "client/static/uploads/messages"))
-MAX_MESSAGE_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_MESSAGE_UPLOAD_SIZE_BYTES", 100 * 1024 * 1024))
+MAX_MESSAGE_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_MESSAGE_UPLOAD_SIZE_BYTES", 50 * 1024 * 1024))
 ALLOWED_MESSAGE_ATTACHMENT_EXTENSIONS = {
     ".jpg": "image",
     ".jpeg": "image",
