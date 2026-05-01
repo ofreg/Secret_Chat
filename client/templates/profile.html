@@ -14,7 +14,12 @@
                     <p class="error-text">{{ error }}</p>
                 {% endif %}
 
+                {% if message %}
+                    <p class="success-text">{{ message }}</p>
+                {% endif %}
+
                 <form method="post" enctype="multipart/form-data" class="form-stack">
+                    <input type="hidden" name="action" value="profile">
                     <label class="form-label">
                         Ім'я
                         <input class="text-input" name="name" value="{{ name }}">
@@ -29,6 +34,29 @@
                         <button type="submit" class="primary-btn">Зберегти</button>
                     </div>
                 </form>
+
+                <div class="panel-card" style="margin-top: 20px;">
+                    <h3 class="card-title">Зміна email</h3>
+                    <p class="card-copy">Введіть новий email і підтвердіть його поточним паролем.</p>
+
+                    <form method="post" class="form-stack">
+                        <input type="hidden" name="action" value="change_email">
+
+                        <label class="form-label">
+                            Email
+                            <input class="text-input" type="email" name="email" value="{{ email }}" required>
+                        </label>
+
+                        <label class="form-label">
+                            Поточний пароль
+                            <input class="text-input" type="password" name="current_password" required>
+                        </label>
+
+                        <div class="helper-row">
+                            <button type="submit" class="primary-btn">Змінити email</button>
+                        </div>
+                    </form>
+                </div>
             </div>
 
             <aside class="panel-card">

@@ -82,17 +82,20 @@ def render_profile_page(
     current_user: User,
     *,
     error: str | None = None,
+    message: str | None = None,
     name_override: str | None = None,
+    email_override: str | None = None,
 ):
     return templates.TemplateResponse(
         request,
         "profile.html",
         {
             "request": request,
-            "email": current_user.email,
+            "email": email_override if email_override is not None else current_user.email,
             "name": name_override if name_override is not None else current_user.username,
             "init_keys": True,
             "error": error,
+            "message": message,
             **build_avatar_props(current_user),
         },
     )
@@ -122,6 +125,25 @@ def remove_avatar_file(filename: str | None):
         path.unlink()
 
 
+def set_auth_cookies(response, access_token: str, refresh_token: str):
+    response.set_cookie(
+        "access_token",
+        access_token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    response.set_cookie(
+        "refresh_token",
+        refresh_token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
+
+
 @router.get("/register", response_class=HTMLResponse)
 def register_page(request: Request):
     return templates.TemplateResponse(request, "register.html", {"request": request})
@@ -145,7 +167,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         return templates.TemplateResponse(
             request,
             "register.html",
-            {"request": request, "error": "Невірний формат email", "email": email},
+            {"request": request, "error": "РќРµРІС–СЂРЅРёР№ С„РѕСЂРјР°С‚ email", "email": email},
             status_code=400,
         )
 
@@ -413,22 +435,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         db.close()
 
     response = RedirectResponse("/profile", status_code=303)
-    response.set_cookie(
-        "access_token",
-        access_token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
-    response.set_cookie(
-        "refresh_token",
-        refresh_token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-    )
+    set_auth_cookies(response, access_token, refresh_token)
     return response
 
 
@@ -475,22 +482,7 @@ def refresh_token_route(request: Request, refresh_token: str = Cookie(None)):
         or "application/json" in request.headers.get("accept", "")
     )
     response = JSONResponse({"status": "ok"}) if wants_json else RedirectResponse("/profile", status_code=303)
-    response.set_cookie(
-        "access_token",
-        new_access_token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
-    response.set_cookie(
-        "refresh_token",
-        refresh_token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-    )
+    set_auth_cookies(response, new_access_token, refresh_token)
     return response
 
 
@@ -521,25 +513,87 @@ def profile_page(request: Request, current_user: User = Depends(get_current_user
 @router.post("/profile")
 def update_profile(
     request: Request,
-    name: str = Form(...),
+    action: str = Form("profile"),
+    name: str = Form(""),
+    email: str = Form(""),
+    current_password: str = Form(""),
     avatar: UploadFile | None = File(None),
     current_user: User = Depends(get_current_user),
 ):
     db: Session = SessionLocal()
+    user: User | None = None
     try:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if action == "change_email":
+            try:
+                valid_email = str(email_adapter.validate_python(email))
+            except ValidationError:
+                audit_logger.warning("email_change_invalid_email user_id=%s email=%s", current_user.id, email)
+                return render_profile_page(
+                    request,
+                    user,
+                    error="РќРµРІС–СЂРЅРёР№ С„РѕСЂРјР°С‚ email",
+                    email_override=email,
+                )
+
+            if not current_password or not verify_password(current_password, user.password):
+                audit_logger.warning("email_change_invalid_password user_id=%s", current_user.id)
+                return render_profile_page(
+                    request,
+                    user,
+                    error="РќРµРІС–СЂРЅРёР№ РїРѕС‚РѕС‡РЅРёР№ РїР°СЂРѕР»СЊ",
+                    email_override=valid_email,
+                )
+
+            existing_email_user = db.query(User).filter(User.email == valid_email).first()
+            if existing_email_user and existing_email_user.id != user.id:
+                audit_logger.warning("email_change_duplicate user_id=%s email=%s", current_user.id, valid_email)
+                return render_profile_page(
+                    request,
+                    user,
+                    error="Р¦РµР№ email РІР¶Рµ РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ",
+                    email_override=valid_email,
+                )
+
+            old_email = user.email
+            user.email = valid_email
+            db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete()
+
+            new_access_token = create_access_token({"sub": user.email})
+            new_refresh_token = create_refresh_token()
+            db.add(
+                RefreshToken(
+                    token=hash_refresh_token(new_refresh_token),
+                    user_id=user.id,
+                    expires_at=utc_now() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+                    user_agent=request.headers.get("user-agent"),
+                    ip_address=request.client.host,
+                )
+            )
+            db.commit()
+            audit_logger.info(
+                "email_change_success user_id=%s old_email=%s new_email=%s",
+                user.id,
+                old_email,
+                user.email,
+            )
+
+            response = RedirectResponse("/profile", status_code=303)
+            set_auth_cookies(response, new_access_token, new_refresh_token)
+            return response
+
         existing_user = db.query(User).filter(User.username == name).first()
         if existing_user and existing_user.id != current_user.id:
             audit_logger.warning("profile_update_duplicate_name user_id=%s attempted_name=%s", current_user.id, name)
             return render_profile_page(
                 request,
-                current_user,
-                error="Це ім'я вже зайняте",
+                user,
+                error="Р¦Рµ С–Рј'СЏ РІР¶Рµ Р·Р°Р№РЅСЏС‚Рµ",
                 name_override=name,
             )
-
-        user = db.query(User).filter(User.id == current_user.id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
 
         user.username = name
         if avatar and avatar.filename:
@@ -556,7 +610,7 @@ def update_profile(
     except ValueError as exc:
         db.rollback()
         audit_logger.warning("profile_update_invalid_avatar user_id=%s", current_user.id)
-        return render_profile_page(request, current_user, error=str(exc), name_override=name)
+        return render_profile_page(request, user or current_user, error=str(exc), name_override=name)
     finally:
         db.close()
 

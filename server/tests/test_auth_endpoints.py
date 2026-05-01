@@ -166,3 +166,38 @@ def test_forgot_password_rate_limit(client, monkeypatch):
 
     response = client.post("/forgot-password", data={"email": "user1@example.com"})
     assert response.status_code == 429
+
+
+def test_change_email_rotates_current_session_to_new_identity(client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+
+    response = client.post(
+        "/profile",
+        data={
+            "action": "change_email",
+            "email": "updated_user1@example.com",
+            "current_password": "Password123!",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/profile"
+
+    response = client.get("/users/me")
+    assert response.status_code == 200
+    assert response.json()["email"] == "updated_user1@example.com"
+
+    response = client.get("/profile")
+    assert response.status_code == 200
+    assert "updated_user1@example.com" in response.text
+
+    response = client.post("/logout", follow_redirects=False)
+    assert response.status_code == 303
+
+    old_email_login = login_user(client, "user1@example.com")
+    assert old_email_login.status_code == 400
+
+    new_email_login = login_user(client, "updated_user1@example.com")
+    assert new_email_login.status_code == 303
+    assert new_email_login.headers["location"] == "/profile"
