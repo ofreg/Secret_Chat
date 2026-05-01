@@ -1,10 +1,12 @@
 import json
 import os
 import logging
+import secrets
 from datetime import timedelta
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +25,22 @@ from app.utils.websocket_manager import manager
 router = APIRouter()
 templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
 USED_PREKEY_RETENTION_DAYS = 7
+MESSAGE_UPLOAD_DIR = Path(os.getenv("MESSAGE_UPLOAD_DIR", "client/static/uploads/messages"))
+MAX_MESSAGE_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_MESSAGE_UPLOAD_SIZE_BYTES", 100 * 1024 * 1024))
+ALLOWED_MESSAGE_ATTACHMENT_EXTENSIONS = {
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".png": "image",
+    ".webp": "image",
+    ".gif": "image",
+    ".mp4": "video",
+    ".webm": "video",
+    ".mov": "video",
+    ".mp3": "audio",
+    ".wav": "audio",
+    ".ogg": "audio",
+    ".m4a": "audio",
+}
 audit_logger = logging.getLogger("app.audit")
 
 
@@ -42,6 +60,17 @@ def serialize_message(message: Message, sender_name: str, *, historical: bool) -
         "content": message.content,
         "historical": historical,
         "delivery_status": get_delivery_status(message),
+        "attachment": (
+            {
+                "kind": message.attachment_kind,
+                "url": message.attachment_url,
+                "name": message.attachment_name,
+                "mime_type": message.attachment_mime_type,
+                "size": message.attachment_size,
+            }
+            if message.attachment_kind and message.attachment_url
+            else None
+        ),
     }
 
 
@@ -124,6 +153,29 @@ async def mark_chat_messages_read(chat_id: int, user_id: int, db: AsyncSession) 
     return messages
 
 
+def save_message_attachment(upload: UploadFile) -> dict:
+    extension = Path(upload.filename or "").suffix.lower()
+    attachment_kind = ALLOWED_MESSAGE_ATTACHMENT_EXTENSIONS.get(extension)
+    if not attachment_kind:
+        raise ValueError("Unsupported attachment type")
+
+    content = upload.file.read(MAX_MESSAGE_UPLOAD_SIZE_BYTES + 1)
+    if len(content) > MAX_MESSAGE_UPLOAD_SIZE_BYTES:
+        raise ValueError("Attachment is too large")
+
+    MESSAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_hex(16)}{extension}"
+    (MESSAGE_UPLOAD_DIR / filename).write_bytes(content)
+
+    return {
+        "kind": attachment_kind,
+        "url": f"/static/uploads/messages/{filename}",
+        "name": upload.filename or filename,
+        "mime_type": upload.content_type or "application/octet-stream",
+        "size": len(content),
+    }
+
+
 @router.get("/messages", response_class=HTMLResponse)
 def messages_page(request: Request, current_user: User = Depends(get_current_user)):
     db: Session = SessionLocal()
@@ -197,6 +249,35 @@ def search_users(query: str, current_user: User = Depends(get_current_user)):
         db.close()
 
     return [{"id": user.id, "username": user.username, **build_avatar_props(user)} for user in users]
+
+
+@router.post("/messages/upload")
+async def upload_message_attachment(
+    chat_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    db: Session = SessionLocal()
+    try:
+        chat = db.query(Chat).filter(Chat.id == chat_id).first()
+        if not chat or current_user.id not in [chat.user1_id, chat.user2_id]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        try:
+            attachment = save_message_attachment(file)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        audit_logger.info(
+            "message_attachment_uploaded chat_id=%s user_id=%s kind=%s size=%s",
+            chat_id,
+            current_user.id,
+            attachment["kind"],
+            attachment["size"],
+        )
+        return JSONResponse({"status": "ok", "attachment": attachment})
+    finally:
+        db.close()
 
 
 @router.post("/messages/start")
@@ -327,7 +408,18 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
 
         try:
             while True:
-                data = await websocket.receive_text()
+                raw_data = await websocket.receive_text()
+                attachment = None
+                content = raw_data
+
+                try:
+                    parsed_payload = json.loads(raw_data)
+                except json.JSONDecodeError:
+                    parsed_payload = None
+
+                if isinstance(parsed_payload, dict) and parsed_payload.get("type") == "media_message":
+                    attachment = parsed_payload.get("attachment") or None
+                    content = parsed_payload.get("caption") or ""
 
                 result = await db.execute(select(Message.id).where(Message.chat_id == chat_id).limit(1))
                 is_first_message = result.scalar_one_or_none() is None
@@ -337,7 +429,12 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                 msg = Message(
                     chat_id=chat_id,
                     sender_id=user.id,
-                    content=data,
+                    content=content,
+                    attachment_kind=attachment.get("kind") if attachment else None,
+                    attachment_url=attachment.get("url") if attachment else None,
+                    attachment_name=attachment.get("name") if attachment else None,
+                    attachment_mime_type=attachment.get("mime_type") if attachment else None,
+                    attachment_size=attachment.get("size") if attachment else None,
                     delivered_at=delivered_at,
                     read_at=read_at,
                 )

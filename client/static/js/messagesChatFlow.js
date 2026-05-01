@@ -2,6 +2,7 @@ export async function sendCurrentMessage({
     awaitCryptoBootstrap,
     getCurrentChatId,
     getInput,
+    getAttachmentInput,
     getChatSocket,
     getMyPublicKey,
     getMyPrivateKey,
@@ -12,12 +13,16 @@ export async function sendCurrentMessage({
     logChatState,
     getRatchetState,
     deleteRatchetState,
-    encryptMessage
+    encryptMessage,
+    authFetch,
+    onAttachmentSent,
+    setAttachmentFeedback
 }) {
     await awaitCryptoBootstrap?.();
 
     const chatId = getCurrentChatId();
     const input = getInput();
+    const attachmentInput = getAttachmentInput?.();
     const chatSocket = getChatSocket();
     const myPublicKey = getMyPublicKey();
     const myPrivateKey = getMyPrivateKey();
@@ -29,6 +34,51 @@ export async function sendCurrentMessage({
             hasInput: Boolean(input)
         }, "warn");
         return;
+    }
+
+    const selectedFile = attachmentInput?.files?.[0] || null;
+    const messageText = input.value.trim();
+
+    if (!messageText && !selectedFile) {
+        return;
+    }
+
+    if (selectedFile) {
+        try {
+            setAttachmentFeedback?.("Uploading media...", "success");
+            const formData = new FormData();
+            formData.append("chat_id", String(chatId));
+            formData.append("file", selectedFile);
+
+            const uploadResponse = await authFetch("/messages/upload", {
+                method: "POST",
+                body: formData
+            });
+            const uploadPayload = await uploadResponse.json();
+
+            if (!uploadResponse.ok || uploadPayload?.status !== "ok" || !uploadPayload?.attachment) {
+                console.error("Attachment upload failed:", uploadPayload);
+                setAttachmentFeedback?.(uploadPayload?.detail || "Upload failed", "error");
+                return;
+            }
+
+            chatSocket.send(JSON.stringify({
+                type: "media_message",
+                attachment: uploadPayload.attachment,
+                caption: messageText
+            }));
+            input.value = "";
+            if (attachmentInput) {
+                attachmentInput.value = "";
+            }
+            onAttachmentSent?.();
+            setAttachmentFeedback?.("");
+            return;
+        } catch (err) {
+            console.error("Attachment send error:", err);
+            setAttachmentFeedback?.("Could not upload attachment", "error");
+            return;
+        }
     }
 
     if (!otherPublicKey) {
@@ -74,9 +124,6 @@ export async function sendCurrentMessage({
     }
 
     try {
-        const messageText = input.value.trim();
-        if (!messageText) return;
-
         const payload = await encryptMessage({
             chatId,
             message: messageText,
@@ -88,6 +135,8 @@ export async function sendCurrentMessage({
 
         chatSocket.send(JSON.stringify(payload));
         input.value = "";
+        onAttachmentSent?.();
+        setAttachmentFeedback?.("");
     } catch (err) {
         console.error("Encryption error:", err);
     }

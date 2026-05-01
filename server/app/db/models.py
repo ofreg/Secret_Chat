@@ -80,6 +80,11 @@ class Message(Base):
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
     content: Mapped[str] = mapped_column(Text)
+    attachment_kind: Mapped[str] = mapped_column(String, nullable=True)
+    attachment_url: Mapped[str] = mapped_column(String, nullable=True)
+    attachment_name: Mapped[str] = mapped_column(String, nullable=True)
+    attachment_mime_type: Mapped[str] = mapped_column(String, nullable=True)
+    attachment_size: Mapped[int] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     delivered_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)

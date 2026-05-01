@@ -60,6 +60,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
         "content": message_payload,
         "historical": False,
         "delivery_status": "read",
+        "attachment": None,
     }
     assert receiver_message == sender_message
     assert first_notification == {"type": "new_chat"}
@@ -84,6 +85,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
         "content": message_payload,
         "historical": True,
         "delivery_status": "read",
+        "attachment": None,
     }
     assert history_complete == {"type": "history_complete"}
 
@@ -120,6 +122,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
                 "content": payload,
                 "historical": False,
                 "delivery_status": "sent",
+                "attachment": None,
             }
 
     saved_messages = db_session.query(Message).filter(Message.chat_id == chat_id).order_by(Message.id).all()
@@ -146,6 +149,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
             "content": message_payloads[0],
             "historical": True,
             "delivery_status": "read",
+            "attachment": None,
         },
         {
             "type": "message",
@@ -154,6 +158,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
             "content": message_payloads[1],
             "historical": True,
             "delivery_status": "read",
+            "attachment": None,
         },
         {
             "type": "message",
@@ -162,6 +167,63 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
             "content": message_payloads[2],
             "historical": True,
             "delivery_status": "read",
+            "attachment": None,
         },
     ]
     assert history_complete == {"type": "history_complete"}
+
+
+def test_websocket_media_message_persists_attachment(client, second_client, db_session):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    create_chat_response = client.post("/messages/start", data={"username": "user2"})
+    assert create_chat_response.status_code == 200
+    chat_id = create_chat_response.json()["chat_id"]
+
+    media_payload = {
+        "type": "media_message",
+        "caption": "listen",
+        "attachment": {
+            "kind": "audio",
+            "url": "/static/uploads/messages/test-track.mp3",
+            "name": "track.mp3",
+            "mime_type": "audio/mpeg",
+            "size": 12345,
+        },
+    }
+
+    with client.websocket_connect(f"/ws/{chat_id}") as sender_ws:
+        sender_status = sender_ws.receive_json()
+        assert sender_status["type"] == "status"
+        assert sender_ws.receive_json() == {"type": "history_complete"}
+
+        sender_ws.send_json(media_payload)
+        echoed_message = receive_until_type(sender_ws, "message")
+
+    assert echoed_message == {
+        "type": "message",
+        "message_id": 1,
+        "sender": "user1",
+        "content": "listen",
+        "historical": False,
+        "delivery_status": "sent",
+        "attachment": {
+            "kind": "audio",
+            "url": "/static/uploads/messages/test-track.mp3",
+            "name": "track.mp3",
+            "mime_type": "audio/mpeg",
+            "size": 12345,
+        },
+    }
+
+    saved_message = db_session.query(Message).filter(Message.chat_id == chat_id).one()
+    assert saved_message.content == "listen"
+    assert saved_message.attachment_kind == "audio"
+    assert saved_message.attachment_url == "/static/uploads/messages/test-track.mp3"
+    assert saved_message.attachment_name == "track.mp3"
+    assert saved_message.attachment_mime_type == "audio/mpeg"
+    assert saved_message.attachment_size == 12345

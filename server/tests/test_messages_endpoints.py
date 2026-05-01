@@ -1,3 +1,5 @@
+import io
+
 from tests.helpers import login_user, register_user, upload_public_key, upload_x3dh_keys
 
 
@@ -186,12 +188,31 @@ def test_messages_key_endpoints_fallback_to_identity_key(client, second_client):
     assert payload["public_key"] == "identity-user2-only"
     assert payload["identity_key"] == "identity-user2-only"
 
-    response = client.get("/messages/get_keys", params={"chat_id": payload["chat_id"]})
+
+def test_message_attachment_upload(client, second_client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    response = client.post("/messages/start", data={"username": "user2"})
     assert response.status_code == 200
-    payload = response.json()
+    chat_id = response.json()["chat_id"]
+
+    upload_response = client.post(
+        "/messages/upload",
+        data={"chat_id": str(chat_id)},
+        files={"file": ("photo.png", io.BytesIO(b"fake-image-bytes"), "image/png")},
+    )
+    assert upload_response.status_code == 200
+    payload = upload_response.json()
     assert payload["status"] == "ok"
-    assert payload["public_key"] == "identity-user2-only"
-    assert payload["identity_key"] == "identity-user2-only"
+    assert payload["attachment"]["kind"] == "image"
+    assert payload["attachment"]["name"] == "photo.png"
+    assert payload["attachment"]["mime_type"] == "image/png"
+    assert payload["attachment"]["size"] == len(b"fake-image-bytes")
+    assert payload["attachment"]["url"].startswith("/static/uploads/messages/")
 
 
 def test_security_headers_present_on_messages_page(client):

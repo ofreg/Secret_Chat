@@ -12,15 +12,18 @@ import {
 import { authFetch, ensureSession } from "./authClient.js?v=20260420i";
 import { encryptMessage } from "./chatCrypto.js?v=20260420i";
 import {
+    bindMediaViewerControls,
     bindChatHeaderControls,
     getSenderLabel,
     markChatAsUpdated,
     renderMessage,
     resetRenderedMessages,
+    setAttachmentFeedback,
     setUserStatus,
+    updateAttachmentComposerState,
     updateMessageStatus,
     updateChatHeaderAvatar
-} from "./messagesUi.js?v=20260430a";
+} from "./messagesUi.js?v=20260430c";
 import {
     createChatSocket,
     createUserSocket,
@@ -33,7 +36,7 @@ import {
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260420i";
+} from "./messagesChatFlow.js?v=20260430c";
 import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420i";
 
 const DEBUG_CHAT = false;
@@ -107,6 +110,7 @@ window.sendMessage = async function () {
         },
         getCurrentChatId,
         getInput: () => document.getElementById("messageInput"),
+        getAttachmentInput: () => document.getElementById("messageAttachmentInput"),
         getChatSocket: () => window.chatSocket,
         getMyPublicKey: () => myPublicKeyCache,
         getMyPrivateKey: () => myPrivateKeyCache,
@@ -117,7 +121,10 @@ window.sendMessage = async function () {
         logChatState,
         getRatchetState,
         deleteRatchetState,
-        encryptMessage
+        encryptMessage,
+        authFetch,
+        onAttachmentSent: () => updateAttachmentComposerState(null),
+        setAttachmentFeedback
     });
 };
 
@@ -148,7 +155,30 @@ window.addEventListener("load", async function () {
     }
 
     bindChatHeaderControls();
+    bindMediaViewerControls();
     connectUserSocket();
+
+    const attachmentInput = document.getElementById("messageAttachmentInput");
+    const attachmentButton = document.getElementById("messageAttachmentButton");
+    const attachmentClear = document.getElementById("attachmentChipClear");
+
+    if (attachmentButton && attachmentInput) {
+        attachmentButton.addEventListener("click", () => {
+            attachmentInput.click();
+        });
+        attachmentInput.addEventListener("change", () => {
+            updateAttachmentComposerState(attachmentInput.files?.[0] || null);
+            setAttachmentFeedback("");
+        });
+    }
+
+    if (attachmentClear && attachmentInput) {
+        attachmentClear.addEventListener("click", () => {
+            attachmentInput.value = "";
+            updateAttachmentComposerState(null);
+            setAttachmentFeedback("");
+        });
+    }
 
     cryptoBootstrapPromise = (async () => {
         logChatState("crypto bootstrap started");

@@ -13,12 +13,6 @@ function resolveStatus(previousStatus, nextStatus) {
     return getStatusRank(nextStatus) >= getStatusRank(previousStatus) ? nextStatus : previousStatus;
 }
 
-function getStatusGlyph(status) {
-    if (status === "read") return "\u2713\u2713";
-    if (status === "delivered") return "\u2713\u2713";
-    return "\u2713";
-}
-
 function getStatusLabel(status) {
     if (status === "read") return "Read";
     if (status === "delivered") return "Delivered";
@@ -29,6 +23,124 @@ function getStatusClass(status) {
     if (status === "read") return "message-status is-read";
     if (status === "delivered") return "message-status is-delivered";
     return "message-status is-sent";
+}
+
+function getViewerElements() {
+    return {
+        modal: document.getElementById("mediaViewer"),
+        image: document.getElementById("mediaViewerImage"),
+        video: document.getElementById("mediaViewerVideo"),
+        title: document.getElementById("mediaViewerTitle")
+    };
+}
+
+function closeMediaViewer() {
+    const { modal, image, video } = getViewerElements();
+    if (!modal || !image || !video) {
+        return;
+    }
+
+    modal.hidden = true;
+    image.hidden = true;
+    image.removeAttribute("src");
+    video.hidden = true;
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+}
+
+function openMediaViewer(attachment) {
+    const { modal, image, video, title } = getViewerElements();
+    if (!modal || !image || !video) {
+        return;
+    }
+
+    if (title) {
+        title.textContent = attachment?.name || "";
+    }
+
+    image.hidden = true;
+    image.removeAttribute("src");
+    video.hidden = true;
+    video.pause();
+    video.removeAttribute("src");
+
+    if (attachment.kind === "image") {
+        image.src = attachment.url;
+        image.alt = attachment.name || "Image attachment";
+        image.hidden = false;
+    } else if (attachment.kind === "video") {
+        video.src = attachment.url;
+        video.hidden = false;
+        void video.play().catch(() => {});
+    } else {
+        return;
+    }
+
+    modal.hidden = false;
+}
+
+function buildAttachmentNode(attachment) {
+    if (!attachment?.url || !attachment?.kind) {
+        return null;
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = `message-attachment attachment-${attachment.kind}`;
+
+    if (attachment.kind === "image") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "message-attachment-button";
+        button.onclick = () => openMediaViewer(attachment);
+
+        const image = document.createElement("img");
+        image.src = attachment.url;
+        image.alt = attachment.name || "Image attachment";
+        image.className = "message-attachment-image";
+        button.appendChild(image);
+        wrapper.appendChild(button);
+        return wrapper;
+    }
+
+    if (attachment.kind === "video") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "message-attachment-button is-video";
+        button.onclick = () => openMediaViewer(attachment);
+
+        const video = document.createElement("video");
+        video.src = attachment.url;
+        video.className = "message-attachment-video";
+        video.preload = "metadata";
+        video.muted = true;
+        video.playsInline = true;
+        button.appendChild(video);
+
+        const badge = document.createElement("span");
+        badge.className = "message-attachment-play";
+        badge.textContent = "Play";
+        button.appendChild(badge);
+        wrapper.appendChild(button);
+        return wrapper;
+    }
+
+    if (attachment.kind === "audio") {
+        const title = document.createElement("div");
+        title.className = "message-attachment-audio-title";
+        title.textContent = attachment.name || "Audio";
+        wrapper.appendChild(title);
+
+        const audio = document.createElement("audio");
+        audio.src = attachment.url;
+        audio.controls = true;
+        audio.preload = "metadata";
+        audio.className = "message-attachment-audio";
+        wrapper.appendChild(audio);
+        return wrapper;
+    }
+
+    return null;
 }
 
 export function bindChatHeaderControls() {
@@ -49,13 +161,40 @@ export function bindChatHeaderControls() {
     };
 }
 
+export function bindMediaViewerControls() {
+    const modal = document.getElementById("mediaViewer");
+    const closeBtn = document.getElementById("mediaViewerClose");
+
+    if (!modal || !closeBtn) {
+        return;
+    }
+
+    closeBtn.onclick = () => closeMediaViewer();
+    modal.onclick = (event) => {
+        if (event.target === modal) {
+            closeMediaViewer();
+        }
+    };
+
+    window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !modal.hidden) {
+            closeMediaViewer();
+        }
+    });
+}
+
 export function resetRenderedMessages() {
     renderedMessages.clear();
     pendingMessageStatuses.clear();
 }
 
 export function renderMessage(chat, senderLabel, text, options = {}) {
-    const { messageId = null, deliveryStatus = null, isOwnMessage = false } = options;
+    const {
+        messageId = null,
+        deliveryStatus = null,
+        isOwnMessage = false,
+        attachment = null
+    } = options;
 
     if (messageId && renderedMessages.has(messageId)) {
         return renderedMessages.get(messageId);
@@ -71,10 +210,19 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
     sender.textContent = `${senderLabel}:`;
     div.appendChild(sender);
 
-    const body = document.createElement("span");
-    body.className = "chat-message-text";
-    body.textContent = ` ${text}`;
-    div.appendChild(body);
+    const hasText = Boolean(text && String(text).trim());
+    const attachmentNode = buildAttachmentNode(attachment);
+    if (attachmentNode) {
+        div.appendChild(document.createTextNode(" "));
+        div.appendChild(attachmentNode);
+    }
+
+    if (hasText) {
+        const body = document.createElement("span");
+        body.className = attachmentNode ? "chat-message-text has-attachment" : "chat-message-text";
+        body.textContent = ` ${text}`;
+        div.appendChild(body);
+    }
 
     if (isOwnMessage && messageId) {
         const effectiveStatus = resolveStatus(
@@ -130,6 +278,38 @@ export function updateMessageStatus(messageId, status) {
     statusNode.title = getStatusLabel(nextStatus);
     statusNode.textContent = "";
     pendingMessageStatuses.delete(messageId);
+}
+
+export function updateAttachmentComposerState(file) {
+    const chip = document.getElementById("attachmentChip");
+    const label = document.getElementById("attachmentChipLabel");
+    if (!chip || !label) {
+        return;
+    }
+
+    if (!file) {
+        chip.hidden = true;
+        label.textContent = "";
+        return;
+    }
+
+    chip.hidden = false;
+    label.textContent = file.name;
+}
+
+export function setAttachmentFeedback(message = "", tone = "") {
+    const feedback = document.getElementById("attachmentFeedback");
+    if (!feedback) {
+        return;
+    }
+
+    feedback.textContent = message;
+    feedback.className = "attachment-feedback";
+    if (tone === "error") {
+        feedback.classList.add("is-error");
+    } else if (tone === "success") {
+        feedback.classList.add("is-success");
+    }
 }
 
 export function getSenderLabel(senderName, myUsername) {

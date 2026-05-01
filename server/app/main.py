@@ -101,6 +101,11 @@ ensure_schema_sql = [
     ("users", "signed_prekey_key_id", "ALTER TABLE users ADD COLUMN signed_prekey_key_id INTEGER"),
     ("messages", "delivered_at", "ALTER TABLE messages ADD COLUMN delivered_at DATETIME"),
     ("messages", "read_at", "ALTER TABLE messages ADD COLUMN read_at DATETIME"),
+    ("messages", "attachment_kind", "ALTER TABLE messages ADD COLUMN attachment_kind TEXT"),
+    ("messages", "attachment_url", "ALTER TABLE messages ADD COLUMN attachment_url TEXT"),
+    ("messages", "attachment_name", "ALTER TABLE messages ADD COLUMN attachment_name TEXT"),
+    ("messages", "attachment_mime_type", "ALTER TABLE messages ADD COLUMN attachment_mime_type TEXT"),
+    ("messages", "attachment_size", "ALTER TABLE messages ADD COLUMN attachment_size INTEGER"),
 ]
 
 inspector = inspect(engine)

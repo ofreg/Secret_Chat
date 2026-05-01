@@ -3,4 +3,5 @@ venv/
 save1/
 __pycache__/
 client/static/uploads/avatars/
+client/static/uploads/messages/
 logs/

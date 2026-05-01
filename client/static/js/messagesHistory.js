@@ -191,7 +191,8 @@ export function createHistoryController({
             renderChatMessage(chat, getSenderLabel(data.sender), cachedText, {
                 messageId,
                 deliveryStatus: data.delivery_status,
-                isOwnMessage
+                isOwnMessage,
+                attachment: data.attachment || null
             });
             renderedMessageIds.add(messageId);
             return;
@@ -223,7 +224,8 @@ export function createHistoryController({
             renderChatMessage(chat, getSenderLabel(data.sender), text, {
                 messageId,
                 deliveryStatus: data.delivery_status,
-                isOwnMessage
+                isOwnMessage,
+                attachment: data.attachment || null
             });
         } catch (err) {
             console.warn("Decrypt error:", err);
@@ -238,7 +240,8 @@ export function createHistoryController({
             renderChatMessage(chat, getSenderLabel(data.sender), fallbackText, {
                 messageId,
                 deliveryStatus: data.delivery_status,
-                isOwnMessage
+                isOwnMessage,
+                attachment: data.attachment || null
             });
         }
     }
