@@ -215,6 +215,35 @@ def test_message_attachment_upload(client, second_client):
     assert payload["attachment"]["url"].startswith("/static/uploads/messages/")
 
 
+def test_encrypted_message_attachment_upload_hides_plain_metadata(client, second_client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    response = client.post("/messages/start", data={"username": "user2"})
+    assert response.status_code == 200
+    chat_id = response.json()["chat_id"]
+
+    upload_response = client.post(
+        "/messages/upload",
+        data={"chat_id": str(chat_id), "encrypted": "true"},
+        files={"file": ("attachment.bin", io.BytesIO(b"encrypted-media-bytes"), "application/octet-stream")},
+    )
+    assert upload_response.status_code == 200
+    payload = upload_response.json()
+    assert payload["status"] == "ok"
+    assert payload["attachment"] == {
+        "kind": "encrypted",
+        "name": "encrypted-media.bin",
+        "mime_type": "application/octet-stream",
+        "size": len(b"encrypted-media-bytes"),
+        "url": payload["attachment"]["url"],
+    }
+    assert payload["attachment"]["url"].startswith("/static/uploads/messages/")
+
+
 def test_security_headers_present_on_messages_page(client):
     response = client.get("/")
     assert response.status_code == 200

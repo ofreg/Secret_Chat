@@ -10,7 +10,11 @@ import {
     saveVerificationStatus
 } from "./crypto.js?v=20260420i";
 import { authFetch, ensureSession } from "./authClient.js?v=20260420i";
-import { encryptMessage } from "./chatCrypto.js?v=20260420i";
+import {
+    decryptAttachmentData,
+    encryptAttachmentData,
+    encryptMessage
+} from "./chatCrypto.js?v=20260514a";
 import {
     bindMediaViewerControls,
     bindAttachmentAlertControls,
@@ -30,14 +34,14 @@ import {
     createUserSocket,
     reloadChatList
 } from "./messagesSockets.js?v=20260430b";
-import { createHistoryController } from "./messagesHistory.js?v=20260420i";
+import { createHistoryController } from "./messagesHistory.js?v=20260514a";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260430c";
+} from "./messagesChatFlow.js?v=20260514a";
 import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420i";
 
 const DEBUG_CHAT = false;
@@ -53,12 +57,31 @@ let currentFingerprint = null;
 let cryptoBootstrapPromise = null;
 let chatSocketOpened = false;
 let chatKeysRetryTimer = null;
+const decryptedAttachmentCache = new Map();
 const historyController = createHistoryController({
     getMyUsername: () => myUsername,
     getCurrentChatId: () => currentChatId,
     getMyPrivateKey: () => myPrivateKeyCache,
     getMyPublicKey: () => myPublicKeyCache,
     getOtherPublicKey: () => window.otherPublicKey,
+    resolveAttachment: async (attachment, isOwnMessage) => {
+        if (!attachment?.meta?.encrypted) {
+            return attachment;
+        }
+
+        const cacheKey = `${attachment.url}|${isOwnMessage ? "own" : "peer"}`;
+        if (decryptedAttachmentCache.has(cacheKey)) {
+            return decryptedAttachmentCache.get(cacheKey);
+        }
+
+        const decryptedAttachment = await decryptAttachmentData({
+            attachment,
+            myPrivateKeyUint8: myPrivateKeyCache,
+            isOwnMessage
+        });
+        decryptedAttachmentCache.set(cacheKey, decryptedAttachment);
+        return decryptedAttachment;
+    },
     renderChatMessage: renderMessage,
     getSenderLabel: (senderName) => getSenderLabel(senderName, myUsername),
     logChatState
@@ -102,6 +125,17 @@ function sortQueuedMessages(messages) {
     });
 }
 
+function clearDecryptedAttachmentCache() {
+    for (const cachedAttachment of decryptedAttachmentCache.values()) {
+        try {
+            if (cachedAttachment?.url?.startsWith("blob:")) {
+                URL.revokeObjectURL(cachedAttachment.url);
+            }
+        } catch {}
+    }
+    decryptedAttachmentCache.clear();
+}
+
 window.sendMessage = async function () {
     await sendCurrentMessage({
         awaitCryptoBootstrap: async () => {
@@ -123,6 +157,7 @@ window.sendMessage = async function () {
         getRatchetState,
         deleteRatchetState,
         encryptMessage,
+        encryptAttachmentData,
         authFetch,
         onAttachmentSent: () => updateAttachmentComposerState(null),
         setAttachmentFeedback
@@ -323,6 +358,7 @@ async function openChatSocket(chatId) {
     deferredLiveMessages = [];
     historyController.reset();
     resetRenderedMessages();
+    clearDecryptedAttachmentCache();
 
     await deleteRatchetState(chatId);
     logChatState("cleared local ratchet state before websocket history sync", { chatId });

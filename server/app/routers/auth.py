@@ -26,6 +26,7 @@ from app.db.models import OneTimePreKey, PasswordResetToken, RefreshToken, User
 from app.db.session import SessionLocal
 from app.dependencies.auth import get_current_user
 from app.utils.avatar import build_avatar_props
+from app.utils.csrf import configure_templates, require_csrf
 from app.utils.jwt import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES,
@@ -41,8 +42,8 @@ from app.utils.time import utc_now
 
 
 email_adapter = TypeAdapter(EmailStr)
-router = APIRouter()
-templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
+router = APIRouter(dependencies=[Depends(require_csrf)])
+templates = configure_templates(Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates")))
 
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
@@ -84,14 +85,13 @@ def render_profile_page(
     error: str | None = None,
     message: str | None = None,
     name_override: str | None = None,
-    email_override: str | None = None,
 ):
     return templates.TemplateResponse(
         request,
         "profile.html",
         {
             "request": request,
-            "email": email_override if email_override is not None else current_user.email,
+            "email": current_user.email,
             "name": name_override if name_override is not None else current_user.username,
             "init_keys": True,
             "error": error,
@@ -210,7 +210,18 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"request": request})
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "request": request,
+            "message": (
+                "Увійдіть у свій акаунт, щоб відкрити захищені сторінки."
+                if request.query_params.get("reauth") == "1"
+                else None
+            ),
+        },
+    )
 
 
 @router.post("/forgot-password", response_class=HTMLResponse)
@@ -515,8 +526,6 @@ def update_profile(
     request: Request,
     action: str = Form("profile"),
     name: str = Form(""),
-    email: str = Form(""),
-    current_password: str = Form(""),
     avatar: UploadFile | None = File(None),
     current_user: User = Depends(get_current_user),
 ):
@@ -527,71 +536,13 @@ def update_profile(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        if action == "change_email":
-            try:
-                valid_email = str(email_adapter.validate_python(email))
-            except ValidationError:
-                audit_logger.warning("email_change_invalid_email user_id=%s email=%s", current_user.id, email)
-                return render_profile_page(
-                    request,
-                    user,
-                    error="РќРµРІС–СЂРЅРёР№ С„РѕСЂРјР°С‚ email",
-                    email_override=email,
-                )
-
-            if not current_password or not verify_password(current_password, user.password):
-                audit_logger.warning("email_change_invalid_password user_id=%s", current_user.id)
-                return render_profile_page(
-                    request,
-                    user,
-                    error="РќРµРІС–СЂРЅРёР№ РїРѕС‚РѕС‡РЅРёР№ РїР°СЂРѕР»СЊ",
-                    email_override=valid_email,
-                )
-
-            existing_email_user = db.query(User).filter(User.email == valid_email).first()
-            if existing_email_user and existing_email_user.id != user.id:
-                audit_logger.warning("email_change_duplicate user_id=%s email=%s", current_user.id, valid_email)
-                return render_profile_page(
-                    request,
-                    user,
-                    error="Р¦РµР№ email РІР¶Рµ РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ",
-                    email_override=valid_email,
-                )
-
-            old_email = user.email
-            user.email = valid_email
-            db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete()
-
-            new_access_token = create_access_token({"sub": user.email})
-            new_refresh_token = create_refresh_token()
-            db.add(
-                RefreshToken(
-                    token=hash_refresh_token(new_refresh_token),
-                    user_id=user.id,
-                    expires_at=utc_now() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
-                    user_agent=request.headers.get("user-agent"),
-                    ip_address=request.client.host,
-                )
-            )
-            db.commit()
-            audit_logger.info(
-                "email_change_success user_id=%s old_email=%s new_email=%s",
-                user.id,
-                old_email,
-                user.email,
-            )
-
-            response = RedirectResponse("/profile", status_code=303)
-            set_auth_cookies(response, new_access_token, new_refresh_token)
-            return response
-
         existing_user = db.query(User).filter(User.username == name).first()
         if existing_user and existing_user.id != current_user.id:
             audit_logger.warning("profile_update_duplicate_name user_id=%s attempted_name=%s", current_user.id, name)
             return render_profile_page(
                 request,
                 user,
-                error="Р¦Рµ С–Рј'СЏ РІР¶Рµ Р·Р°Р№РЅСЏС‚Рµ",
+                error="Це ім'я вже зайняте",
                 name_override=name,
             )
 

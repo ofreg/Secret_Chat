@@ -1,5 +1,14 @@
 let refreshInFlight = null;
 
+function readCookie(name) {
+    const prefix = `${name}=`;
+    return document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(prefix))
+        ?.slice(prefix.length) || "";
+}
+
 function wantsJsonResponse() {
     return {
         "X-Requested-With": "fetch",
@@ -7,12 +16,29 @@ function wantsJsonResponse() {
     };
 }
 
+function buildAuthHeaders(init = {}) {
+    const headers = {
+        ...wantsJsonResponse(),
+        ...(init.headers || {})
+    };
+
+    const method = String(init.method || "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes(method)) {
+        const csrfToken = readCookie("csrf_token");
+        if (csrfToken) {
+            headers["X-CSRF-Token"] = csrfToken;
+        }
+    }
+
+    return headers;
+}
+
 export async function refreshAccessToken() {
     if (!refreshInFlight) {
         refreshInFlight = fetch("/refresh", {
             method: "POST",
             credentials: "include",
-            headers: wantsJsonResponse()
+            headers: buildAuthHeaders({ method: "POST" })
         }).then(async (response) => {
             let payload = null;
             try {
@@ -46,10 +72,7 @@ export async function authFetch(input, init = {}, retry = true) {
     const response = await fetch(input, {
         credentials: "include",
         ...init,
-        headers: {
-            ...wantsJsonResponse(),
-            ...(init.headers || {})
-        }
+        headers: buildAuthHeaders(init)
     });
 
     if (response.status !== 401 || !retry) {
@@ -64,9 +87,6 @@ export async function authFetch(input, init = {}, retry = true) {
     return fetch(input, {
         credentials: "include",
         ...init,
-        headers: {
-            ...wantsJsonResponse(),
-            ...(init.headers || {})
-        }
+        headers: buildAuthHeaders(init)
     });
 }

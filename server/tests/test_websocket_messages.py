@@ -71,6 +71,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client, 
     assert saved_message.content == message_payload
     assert saved_message.delivered_at is not None
     assert saved_message.read_at is not None
+    db_session.rollback()
 
     with second_client.websocket_connect(f"/ws/{chat_id}") as history_ws:
         history_status = history_ws.receive_json()
@@ -129,6 +130,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client,
     assert [msg.content for msg in saved_messages] == message_payloads
     assert all(msg.delivered_at is None for msg in saved_messages)
     assert all(msg.read_at is None for msg in saved_messages)
+    db_session.rollback()
 
     with second_client.websocket_connect(f"/ws/{chat_id}") as reconnected_ws:
         reconnect_status = reconnected_ws.receive_json()
@@ -227,3 +229,4 @@ def test_websocket_media_message_persists_attachment(client, second_client, db_s
     assert saved_message.attachment_name == "track.mp3"
     assert saved_message.attachment_mime_type == "audio/mpeg"
     assert saved_message.attachment_size == 12345
+    db_session.rollback()

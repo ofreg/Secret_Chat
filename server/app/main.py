@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from collections import defaultdict
 from time import time
@@ -11,7 +11,9 @@ from app.routers import auth, messages
 from app.db.base import Base
 from app.db.session import engine
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError
 from fastapi.staticfiles import StaticFiles
+from app.utils.csrf import attach_csrf_cookie, configure_templates, get_or_create_csrf_token
 from app.utils.logging_config import setup_logging
 # ---------------------- Конфіг ----------------------
 login_attempts = defaultdict(list)
@@ -19,7 +21,7 @@ MAX_ATTEMPTS = 5
 WINDOW_SECONDS = 60
 
 # Абсолютний шлях всередині контейнера
-templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
+templates = configure_templates(Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates")))
 setup_logging()
 logger = logging.getLogger("app.main")
 
@@ -44,6 +46,9 @@ async def handle_http_exception(request: Request, exc: StarletteHTTPException):
     elif exc.status_code in {403, 404}:
         logger.warning("HTTP %s on %s %s", exc.status_code, request.method, request.url.path)
 
+    if exc.status_code == 401 and "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/login?reauth=1", status_code=303)
+
     if exc.status_code in {403, 404} and wants_html_response(request):
         return templates.TemplateResponse(
             request,
@@ -61,6 +66,7 @@ async def handle_http_exception(request: Request, exc: StarletteHTTPException):
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     started_at = time()
+    get_or_create_csrf_token(request)
     try:
         response = await call_next(request)
     except Exception:
@@ -80,6 +86,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
     )
+    attach_csrf_cookie(request, response)
     if not request.url.path.startswith("/static"):
         logger.info(
             "%s %s -> %s (%sms)",
@@ -91,7 +98,6 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 # ---------------------- DB ----------------------
-Base.metadata.create_all(bind=engine)
 ensure_schema_sql = [
     ("users", "account_instance_id", "ALTER TABLE users ADD COLUMN account_instance_id TEXT"),
     ("users", "avatar_filename", "ALTER TABLE users ADD COLUMN avatar_filename TEXT"),
@@ -106,6 +112,7 @@ ensure_schema_sql = [
     ("messages", "attachment_name", "ALTER TABLE messages ADD COLUMN attachment_name TEXT"),
     ("messages", "attachment_mime_type", "ALTER TABLE messages ADD COLUMN attachment_mime_type TEXT"),
     ("messages", "attachment_size", "ALTER TABLE messages ADD COLUMN attachment_size INTEGER"),
+    ("messages", "attachment_meta", "ALTER TABLE messages ADD COLUMN attachment_meta TEXT"),
 ]
 
 inspector = inspect(engine)
@@ -117,7 +124,11 @@ with engine.begin() as connection:
             continue
         existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
         if column_name not in existing_columns:
-            connection.execute(text(ddl))
+            try:
+                connection.execute(text(ddl))
+            except OperationalError as error:
+                if "duplicate column name" not in str(error).lower():
+                    raise
 
 Base.metadata.create_all(bind=engine)
 

@@ -7,10 +7,11 @@
     <section class="auth-card accent-card">
         <h1 class="auth-title">Увійти в акаунт</h1>
         <p class="auth-subtitle">
-            Поверніться в чат, відкрийте повідомлення та продовжуйте спілкування в єдиному інтерфейсі.
+            Увійдіть, щоб відкрити повідомлення, профіль і всі захищені можливості застосунку.
         </p>
 
         <form method="post" class="form-stack">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <label class="form-label">
                 Email
                 <input class="text-input" name="email" type="email" required autocomplete="email">
@@ -23,6 +24,10 @@
 
             {% if error %}
                 <p class="error-text">{{ error }}</p>
+            {% endif %}
+
+            {% if message %}
+                <p class="success-text">{{ message }}</p>
             {% endif %}
 
             <button type="submit" class="primary-btn auth-submit">Увійти</button>

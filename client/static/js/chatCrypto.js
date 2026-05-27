@@ -69,6 +69,121 @@ export async function decryptMessage({
     return decryptLegacyPayload(payload, myPrivateKeyUint8);
 }
 
+export async function encryptAttachmentData({
+    bytes,
+    metadata,
+    recipientPublicBase64,
+    senderPublicBase64
+}) {
+    const rawKey = crypto.getRandomValues(new Uint8Array(32));
+    const fileIv = crypto.getRandomValues(new Uint8Array(12));
+    const metadataIv = crypto.getRandomValues(new Uint8Array(12));
+    const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        rawKey,
+        { name: "AES-GCM" },
+        false,
+        ["encrypt", "decrypt"]
+    );
+    const encryptedBuffer = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: fileIv },
+        cryptoKey,
+        bytes
+    );
+    const metadataBuffer = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: metadataIv },
+        cryptoKey,
+        naclUtil.decodeUTF8(JSON.stringify(metadata || {}))
+    );
+    const keyPayload = JSON.stringify({
+        key: naclUtil.encodeBase64(rawKey)
+    });
+
+    return {
+        encryptedBytes: new Uint8Array(encryptedBuffer),
+        meta: {
+            encrypted: true,
+            version: 2,
+            algorithm: "AES-GCM",
+            file_iv: naclUtil.encodeBase64(fileIv),
+            metadata_iv: naclUtil.encodeBase64(metadataIv),
+            metadata_ciphertext: naclUtil.encodeBase64(new Uint8Array(metadataBuffer)),
+            sender_key: encryptForPublicKey(keyPayload, senderPublicBase64),
+            recipient_key: encryptForPublicKey(keyPayload, recipientPublicBase64)
+        }
+    };
+}
+
+export async function decryptAttachmentData({
+    attachment,
+    myPrivateKeyUint8,
+    isOwnMessage
+}) {
+    if (!attachment?.url || !attachment?.meta?.encrypted) {
+        return attachment?.url || null;
+    }
+
+    const wrappedKeyPayload = isOwnMessage
+        ? attachment.meta.sender_key
+        : attachment.meta.recipient_key;
+
+    if (
+        !wrappedKeyPayload ||
+        !attachment.meta.file_iv ||
+        !attachment.meta.metadata_iv ||
+        !attachment.meta.metadata_ciphertext
+    ) {
+        throw new Error("Missing attachment encryption metadata");
+    }
+
+    const decryptedKeyPayload = decryptLegacyPayload(wrappedKeyPayload, myPrivateKeyUint8);
+    const parsedKeyPayload = JSON.parse(decryptedKeyPayload);
+    const rawKey = naclUtil.decodeBase64(parsedKeyPayload.key);
+    const fileIv = naclUtil.decodeBase64(attachment.meta.file_iv);
+    const metadataIv = naclUtil.decodeBase64(attachment.meta.metadata_iv);
+    const metadataCiphertext = naclUtil.decodeBase64(attachment.meta.metadata_ciphertext);
+
+    const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        rawKey,
+        { name: "AES-GCM" },
+        false,
+        ["decrypt"]
+    );
+    const decryptedMetadataBuffer = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: metadataIv },
+        cryptoKey,
+        metadataCiphertext
+    );
+    const parsedMetadata = JSON.parse(
+        naclUtil.encodeUTF8(new Uint8Array(decryptedMetadataBuffer))
+    );
+
+    const response = await fetch(attachment.url, { credentials: "same-origin" });
+    if (!response.ok) {
+        throw new Error(`Failed to fetch encrypted attachment: ${response.status}`);
+    }
+
+    const encryptedBytes = new Uint8Array(await response.arrayBuffer());
+    const decryptedBuffer = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: fileIv },
+        cryptoKey,
+        encryptedBytes
+    );
+    const blob = new Blob([decryptedBuffer], {
+        type: parsedMetadata.mime_type || "application/octet-stream"
+    });
+
+    return {
+        ...attachment,
+        kind: parsedMetadata.kind || attachment.kind,
+        name: parsedMetadata.name || attachment.name,
+        mime_type: parsedMetadata.mime_type || attachment.mime_type,
+        size: parsedMetadata.size ?? attachment.size,
+        url: URL.createObjectURL(blob)
+    };
+}
+
 function decryptLegacyPayload(payload, myPrivateKeyUint8) {
     if (!payload.epk) throw new Error("Missing epk");
 

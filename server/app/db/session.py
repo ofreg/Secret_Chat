@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
@@ -20,30 +20,59 @@ DB_URL_SYNC = os.getenv("DATABASE_URL_SYNC") or (
 )
 
 DB_URL_ASYNC = os.getenv("DATABASE_URL_ASYNC") or DB_URL_SYNC.replace("postgresql://", "postgresql+asyncpg://")
+IS_SQLITE = DB_URL_SYNC.startswith("sqlite")
+
+sync_engine_kwargs = {"pool_pre_ping": True}
+async_engine_kwargs = {"pool_pre_ping": True}
+
+if IS_SQLITE:
+    sync_engine_kwargs.update(
+        {
+            "connect_args": {"check_same_thread": False, "timeout": 30},
+        }
+    )
+    async_engine_kwargs.update(
+        {
+            "connect_args": {"timeout": 30},
+        }
+    )
 
 
 # ✅ pool_pre_ping — перевіряє живість з'єднання
 engine = create_engine(
     DB_URL_SYNC,
-    pool_pre_ping=True,
+    **sync_engine_kwargs,
 )
 
 SessionLocal = sessionmaker(
     bind=engine,
     autocommit=False,
     autoflush=False,
+    expire_on_commit=False,
 )
 
 
 async_engine = create_async_engine(
     DB_URL_ASYNC,
-    pool_pre_ping=True,
+    **async_engine_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(
     bind=async_engine,
     expire_on_commit=False,
 )
+
+
+def _configure_sqlite_connection(dbapi_connection, _connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
+
+
+if IS_SQLITE:
+    event.listen(engine, "connect", _configure_sqlite_connection)
+    event.listen(async_engine.sync_engine, "connect", _configure_sqlite_connection)
 
 
 # 🔁 ЧЕКАЄМО ПОКИ БД СТАРТУЄ

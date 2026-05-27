@@ -17,13 +17,14 @@ from app.db.session import AsyncSessionLocal, SessionLocal
 from app.dependencies.auth import get_current_user
 from app.routers.auth import ensure_account_instance_id
 from app.utils.avatar import build_avatar_props
+from app.utils.csrf import configure_templates, require_csrf
 from app.utils.jwt import decode_access_token
 from app.utils.time import utc_now
 from app.utils.websocket_manager import manager
 
 
-router = APIRouter()
-templates = Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates"))
+router = APIRouter(dependencies=[Depends(require_csrf)])
+templates = configure_templates(Jinja2Templates(directory=os.getenv("TEMPLATES_DIR", "/code/client/templates")))
 USED_PREKEY_RETENTION_DAYS = 7
 MESSAGE_UPLOAD_DIR = Path(os.getenv("MESSAGE_UPLOAD_DIR", "client/static/uploads/messages"))
 MAX_MESSAGE_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_MESSAGE_UPLOAD_SIZE_BYTES", 50 * 1024 * 1024))
@@ -53,6 +54,25 @@ def get_delivery_status(message: Message) -> str:
 
 
 def serialize_message(message: Message, sender_name: str, *, historical: bool) -> dict:
+    attachment_meta = None
+    if message.attachment_meta:
+        try:
+            attachment_meta = json.loads(message.attachment_meta)
+        except json.JSONDecodeError:
+            attachment_meta = None
+
+    attachment_payload = None
+    if message.attachment_kind and message.attachment_url:
+        attachment_payload = {
+            "kind": message.attachment_kind,
+            "url": message.attachment_url,
+            "name": message.attachment_name,
+            "mime_type": message.attachment_mime_type,
+            "size": message.attachment_size,
+        }
+        if attachment_meta is not None:
+            attachment_payload["meta"] = attachment_meta
+
     return {
         "type": "message",
         "message_id": message.id,
@@ -60,17 +80,7 @@ def serialize_message(message: Message, sender_name: str, *, historical: bool) -
         "content": message.content,
         "historical": historical,
         "delivery_status": get_delivery_status(message),
-        "attachment": (
-            {
-                "kind": message.attachment_kind,
-                "url": message.attachment_url,
-                "name": message.attachment_name,
-                "mime_type": message.attachment_mime_type,
-                "size": message.attachment_size,
-            }
-            if message.attachment_kind and message.attachment_url
-            else None
-        ),
+        "attachment": attachment_payload,
     }
 
 
@@ -153,7 +163,24 @@ async def mark_chat_messages_read(chat_id: int, user_id: int, db: AsyncSession) 
     return messages
 
 
-def save_message_attachment(upload: UploadFile) -> dict:
+def save_message_attachment(upload: UploadFile, *, encrypted: bool = False) -> dict:
+    if encrypted:
+        content = upload.file.read(MAX_MESSAGE_UPLOAD_SIZE_BYTES + 1)
+        if len(content) > MAX_MESSAGE_UPLOAD_SIZE_BYTES:
+            raise ValueError("Attachment is too large")
+
+        MESSAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        filename = f"{secrets.token_hex(16)}.bin"
+        (MESSAGE_UPLOAD_DIR / filename).write_bytes(content)
+
+        return {
+            "kind": "encrypted",
+            "url": f"/static/uploads/messages/{filename}",
+            "name": "encrypted-media.bin",
+            "mime_type": "application/octet-stream",
+            "size": len(content),
+        }
+
     extension = Path(upload.filename or "").suffix.lower()
     attachment_kind = ALLOWED_MESSAGE_ATTACHMENT_EXTENSIONS.get(extension)
     if not attachment_kind:
@@ -254,6 +281,7 @@ def search_users(query: str, current_user: User = Depends(get_current_user)):
 @router.post("/messages/upload")
 async def upload_message_attachment(
     chat_id: int = Form(...),
+    encrypted: bool = Form(False),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
@@ -264,7 +292,7 @@ async def upload_message_attachment(
             raise HTTPException(status_code=403, detail="Access denied")
 
         try:
-            attachment = save_message_attachment(file)
+            attachment = save_message_attachment(file, encrypted=encrypted)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -421,6 +449,15 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                     attachment = parsed_payload.get("attachment") or None
                     content = parsed_payload.get("caption") or ""
 
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False)
+
+                attachment_meta = None
+                if attachment:
+                    raw_attachment_meta = attachment.get("meta")
+                    if raw_attachment_meta is not None:
+                        attachment_meta = json.dumps(raw_attachment_meta, ensure_ascii=False)
+
                 result = await db.execute(select(Message.id).where(Message.chat_id == chat_id).limit(1))
                 is_first_message = result.scalar_one_or_none() is None
 
@@ -435,6 +472,7 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                     attachment_name=attachment.get("name") if attachment else None,
                     attachment_mime_type=attachment.get("mime_type") if attachment else None,
                     attachment_size=attachment.get("size") if attachment else None,
+                    attachment_meta=attachment_meta,
                     delivered_at=delivered_at,
                     read_at=read_at,
                 )

@@ -1,9 +1,14 @@
+import asyncio
 import os
 import sys
+import time
 from pathlib import Path
+from contextlib import suppress
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import close_all_sessions
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,15 +30,51 @@ if str(SERVER_ROOT) not in sys.path:
 
 from app.core.rate_limit import forgot_password_attempts, login_attempts
 from app.db.base import Base
-from app.db.session import SessionLocal, engine
+from app.db.session import SessionLocal, async_engine, engine
 from app.main import app
 from app.utils.websocket_manager import manager
 
 
+def prepare_csrf_client(test_client: TestClient) -> TestClient:
+    original_post = test_client.post
+    test_client.get("/")
+
+    def csrf_post(*args, **kwargs):
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("X-CSRF-Token", test_client.cookies.get("csrf_token", ""))
+        return original_post(*args, headers=headers, **kwargs)
+
+    test_client.post = csrf_post
+    return test_client
+
+
+def dispose_test_database_connections():
+    with suppress(Exception):
+        close_all_sessions()
+    with suppress(Exception):
+        engine.dispose()
+    with suppress(Exception):
+        asyncio.run(async_engine.dispose())
+
+
+def reset_test_database_state():
+    last_error = None
+    for _attempt in range(5):
+        try:
+            dispose_test_database_connections()
+            Base.metadata.drop_all(bind=engine)
+            Base.metadata.create_all(bind=engine)
+            return
+        except OperationalError as error:
+            last_error = error
+            time.sleep(0.2)
+    if last_error is not None:
+        raise last_error
+
+
 @pytest.fixture(autouse=True)
 def reset_state():
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    reset_test_database_state()
 
     login_attempts.clear()
     forgot_password_attempts.clear()
@@ -44,6 +85,7 @@ def reset_state():
 
     yield
 
+    dispose_test_database_connections()
     manager.chat_connections.clear()
     manager.chat_user_connections.clear()
     manager.user_connections.clear()
@@ -54,13 +96,13 @@ def reset_state():
 @pytest.fixture
 def client():
     with TestClient(app) as test_client:
-        yield test_client
+        yield prepare_csrf_client(test_client)
 
 
 @pytest.fixture
 def second_client():
     with TestClient(app) as test_client:
-        yield test_client
+        yield prepare_csrf_client(test_client)
 
 
 @pytest.fixture

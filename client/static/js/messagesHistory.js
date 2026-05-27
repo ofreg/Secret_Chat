@@ -6,7 +6,7 @@ import {
     saveCachedMessageText,
     saveLastSeenMessageId
 } from "./crypto.js?v=20260420i";
-import { decryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260420i";
+import { decryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260514a";
 
 export function createHistoryController({
     getMyUsername,
@@ -14,6 +14,7 @@ export function createHistoryController({
     getMyPrivateKey,
     getMyPublicKey,
     getOtherPublicKey,
+    resolveAttachment,
     renderChatMessage,
     getSenderLabel,
     logChatState
@@ -188,11 +189,23 @@ export function createHistoryController({
         }
 
         if (isHistorical && messageId && messageId <= lastSeenMessageId && cachedText) {
-            renderChatMessage(chat, getSenderLabel(data.sender), cachedText, {
+            let resolvedAttachment = null;
+            let resolvedText = cachedText;
+            if (data.attachment) {
+                try {
+                    resolvedAttachment = await resolveAttachment(data.attachment, isOwnMessage);
+                } catch (attachmentError) {
+                    console.warn("Historical attachment decrypt error:", attachmentError);
+                    resolvedText = resolvedText
+                        ? `${resolvedText}\n[Encrypted attachment unavailable]`
+                        : "[Encrypted attachment unavailable]";
+                }
+            }
+            renderChatMessage(chat, getSenderLabel(data.sender), resolvedText, {
                 messageId,
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
-                attachment: data.attachment || null
+                attachment: resolvedAttachment
             });
             renderedMessageIds.add(messageId);
             return;
@@ -200,6 +213,7 @@ export function createHistoryController({
 
         try {
             let text;
+            let attachment = data.attachment || null;
 
             if (encryptedPayload && payload) {
                 text = await decryptWithRecovery({
@@ -215,6 +229,18 @@ export function createHistoryController({
                 text = cachedText || data.content;
             }
 
+            if (attachment) {
+                try {
+                    attachment = await resolveAttachment(attachment, isOwnMessage);
+                } catch (attachmentError) {
+                    console.warn("Attachment decrypt error:", attachmentError);
+                    attachment = null;
+                    text = text
+                        ? `${text}\n[Encrypted attachment unavailable]`
+                        : "[Encrypted attachment unavailable]";
+                }
+            }
+
             if (messageId) {
                 await saveCachedMessageText(chatId, messageId, text);
                 await saveLastSeenMessageId(chatId, Math.max(lastSeenMessageId, messageId));
@@ -225,7 +251,7 @@ export function createHistoryController({
                 messageId,
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
-                attachment: data.attachment || null
+                attachment
             });
         } catch (err) {
             console.warn("Decrypt error:", err);

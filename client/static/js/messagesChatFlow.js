@@ -26,6 +26,7 @@ export async function sendCurrentMessage({
     getRatchetState,
     deleteRatchetState,
     encryptMessage,
+    encryptAttachmentData,
     authFetch,
     onAttachmentSent,
     setAttachmentFeedback
@@ -56,6 +57,14 @@ export async function sendCurrentMessage({
     }
 
     if (selectedFile) {
+        if (!otherPublicKey) {
+            const refreshed = await refreshChatKeys(chatId);
+            if (!refreshed || !getOtherPublicKey()) {
+                logChatState("media send blocked: recipient keys are not available yet", null, "warn");
+                return;
+            }
+        }
+
         const extension = getFileExtension(selectedFile.name);
         if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
             setAttachmentFeedback?.("Цей формат файлу не підтримується. Дозволені: JPG, PNG, WEBP, GIF, MP4, WEBM, MOV, MP3, WAV, OGG, M4A.", "error");
@@ -68,10 +77,35 @@ export async function sendCurrentMessage({
         }
 
         try {
+            setAttachmentFeedback?.("Encrypting media...", "success");
+            const sourceBytes = await selectedFile.arrayBuffer();
+            const attachmentKind = selectedFile.type.startsWith("image/")
+                ? "image"
+                : selectedFile.type.startsWith("video/")
+                    ? "video"
+                    : "audio";
+            const encryptedAttachment = await encryptAttachmentData({
+                bytes: sourceBytes,
+                metadata: {
+                    kind: attachmentKind,
+                    name: selectedFile.name,
+                    mime_type: selectedFile.type || "application/octet-stream",
+                    size: selectedFile.size
+                },
+                recipientPublicBase64: getOtherPublicKey(),
+                senderPublicBase64: myPublicKey
+            });
+
             setAttachmentFeedback?.("Uploading media...", "success");
             const formData = new FormData();
             formData.append("chat_id", String(chatId));
-            formData.append("file", selectedFile);
+            formData.append("encrypted", "true");
+            const encryptedFile = new File(
+                [encryptedAttachment.encryptedBytes],
+                "attachment.bin",
+                { type: "application/octet-stream" }
+            );
+            formData.append("file", encryptedFile);
 
             const uploadResponse = await authFetch("/messages/upload", {
                 method: "POST",
@@ -85,10 +119,29 @@ export async function sendCurrentMessage({
                 return;
             }
 
+            let encryptedCaption = "";
+            if (messageText) {
+                encryptedCaption = await encryptMessage({
+                    chatId,
+                    message: messageText,
+                    recipientPublicBase64: getOtherPublicKey(),
+                    recipientPrekeyBundle: getOtherPrekeyBundle(),
+                    senderPublicBase64: myPublicKey,
+                    myPrivateKeyUint8: myPrivateKey
+                });
+            }
+
             chatSocket.send(JSON.stringify({
                 type: "media_message",
-                attachment: uploadPayload.attachment,
-                caption: messageText
+                attachment: {
+                    kind: uploadPayload.attachment.kind,
+                    url: uploadPayload.attachment.url,
+                    name: uploadPayload.attachment.name,
+                    mime_type: uploadPayload.attachment.mime_type,
+                    size: uploadPayload.attachment.size,
+                    meta: encryptedAttachment.meta
+                },
+                caption: encryptedCaption
             }));
             input.value = "";
             if (attachmentInput) {
