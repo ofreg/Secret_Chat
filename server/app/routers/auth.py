@@ -1,3 +1,4 @@
+import json
 import os
 import secrets
 import uuid
@@ -22,7 +23,7 @@ from app.core.rate_limit import (
     forgot_password_attempts,
     login_attempts,
 )
-from app.db.models import OneTimePreKey, PasswordResetToken, RefreshToken, User
+from app.db.models import Device, DeviceOneTimePreKey, EncryptedKeyBackup, OneTimePreKey, PasswordResetToken, RefreshToken, User
 from app.db.session import SessionLocal
 from app.dependencies.auth import get_current_user
 from app.utils.avatar import build_avatar_props
@@ -51,21 +52,32 @@ AVATAR_UPLOAD_DIR = Path(os.getenv("AVATAR_UPLOAD_DIR", "client/static/uploads/a
 MAX_AVATAR_SIZE_BYTES = int(os.getenv("MAX_AVATAR_SIZE_BYTES", 2 * 1024 * 1024))
 ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 audit_logger = logging.getLogger("app.audit")
+DEFAULT_DEVICE_NAME = "Browser device"
 
 
 class OneTimePreKeySchema(BaseModel):
-    key_id: int
-    public_key: str
+    key_id: int = Field(gt=0)
+    public_key: str = Field(min_length=1)
 
 
 class PublicKeySchema(BaseModel):
-    public_key: str
-    identity_key: str | None = None
-    signing_key: str | None = None
-    signed_prekey: str | None = None
-    signed_prekey_signature: str | None = None
-    signed_prekey_key_id: int | None = None
+    device_id: str | None = Field(default=None, min_length=1)
+    device_name: str | None = Field(default=None, min_length=1)
+    identity_key: str = Field(min_length=1)
+    identity_signing_key: str = Field(min_length=1)
+    signed_prekey: str = Field(min_length=1)
+    signed_prekey_signature: str = Field(min_length=1)
+    signed_prekey_key_id: int = Field(gt=0)
     one_time_prekeys: List[OneTimePreKeySchema] = Field(default_factory=list)
+
+
+class EncryptedKeyBackupSchema(BaseModel):
+    version: int = Field(ge=1)
+    salt: str = Field(min_length=1)
+    iv: str = Field(min_length=1)
+    ciphertext: str = Field(min_length=1)
+    backup_version: int = Field(ge=1)
+    updated_at_client: str | None = None
 
 
 def ensure_account_instance_id(user: User, db: Session) -> str:
@@ -76,6 +88,37 @@ def ensure_account_instance_id(user: User, db: Session) -> str:
     db.commit()
     db.refresh(user)
     return user.account_instance_id
+
+
+def resolve_device_id(value: str | None) -> str:
+    normalized = (value or "").strip()
+    return normalized or uuid.uuid4().hex
+
+
+def resolve_device_name(value: str | None) -> str:
+    normalized = (value or "").strip()
+    return normalized[:120] if normalized else DEFAULT_DEVICE_NAME
+
+
+def get_or_create_device(db: Session, user: User, *, device_id: str, device_name: str) -> Device:
+    device = (
+        db.query(Device)
+        .filter(Device.user_id == user.id, Device.device_id == device_id, Device.revoked_at.is_(None))
+        .first()
+    )
+    if not device:
+        device = Device(
+            user_id=user.id,
+            device_id=device_id,
+            device_name=device_name,
+        )
+        db.add(device)
+        db.flush()
+    else:
+        device.device_name = device_name or device.device_name
+
+    device.last_seen_at = utc_now()
+    return device
 
 
 def render_profile_page(
@@ -568,15 +611,15 @@ def update_profile(
     return RedirectResponse("/profile", status_code=303)
 
 
-@router.post("/users/keys")
-def upload_keys(data: PublicKeySchema, current_user: User = Depends(get_current_user)):
-    db: Session = SessionLocal()
+@router.post("/internal/disabled/users/keys")
+def upload_keys_disabled(current_user: User = Depends(get_current_user)):
+    raise HTTPException(status_code=410, detail="Legacy key endpoint removed")
     try:
         user = db.query(User).filter(User.id == current_user.id).first()
         if not user:
             return {"status": "error", "message": "Користувач не знайдений"}
 
-        user.public_key = data.public_key
+        user.identity_key = data.identity_key
         db.commit()
         audit_logger.info("legacy_keys_uploaded user_id=%s", user.id)
     finally:
@@ -585,17 +628,16 @@ def upload_keys(data: PublicKeySchema, current_user: User = Depends(get_current_
     return {"status": "ok"}
 
 
-@router.post("/users/x3dh-keys")
-def upload_x3dh_keys(data: PublicKeySchema, current_user: User = Depends(get_current_user)):
+@router.post("/internal/legacy/users/x3dh-keys")
+def upload_x3dh_keys_legacy(data: PublicKeySchema, current_user: User = Depends(get_current_user)):
     db: Session = SessionLocal()
     try:
         user = db.query(User).filter(User.id == current_user.id).first()
         if not user:
             return {"status": "error", "message": "Користувач не знайдений"}
 
-        user.public_key = data.public_key
-        user.identity_key = data.identity_key or data.public_key
-        user.signing_key = data.signing_key
+        user.identity_key = data.identity_key
+        user.identity_signing_key = data.identity_signing_key
         user.signed_prekey = data.signed_prekey
         user.signed_prekey_signature = data.signed_prekey_signature
         user.signed_prekey_key_id = data.signed_prekey_key_id
@@ -620,3 +662,151 @@ def upload_x3dh_keys(data: PublicKeySchema, current_user: User = Depends(get_cur
         db.close()
 
     return {"status": "ok"}
+
+
+@router.post("/users/x3dh-keys")
+def upload_x3dh_keys(data: PublicKeySchema, current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            return {"status": "error", "message": "РљРѕСЂРёСЃС‚СѓРІР°С‡ РЅРµ Р·РЅР°Р№РґРµРЅРёР№"}
+
+        device_id = resolve_device_id(data.device_id)
+        device_name = resolve_device_name(data.device_name)
+        device = get_or_create_device(db, user, device_id=device_id, device_name=device_name)
+
+        user.identity_key = data.identity_key
+        user.identity_signing_key = data.identity_signing_key
+        user.signed_prekey = data.signed_prekey
+        user.signed_prekey_signature = data.signed_prekey_signature
+        user.signed_prekey_key_id = data.signed_prekey_key_id
+        device.identity_key = data.identity_key
+        device.identity_signing_key = data.identity_signing_key
+        device.signed_prekey = data.signed_prekey
+        device.signed_prekey_signature = data.signed_prekey_signature
+        device.signed_prekey_key_id = data.signed_prekey_key_id
+
+        db.query(OneTimePreKey).filter(OneTimePreKey.user_id == user.id).delete()
+        db.query(DeviceOneTimePreKey).filter(DeviceOneTimePreKey.device_id == device_id).delete()
+        for prekey in data.one_time_prekeys:
+            db.add(
+                OneTimePreKey(
+                    user_id=user.id,
+                    key_id=prekey.key_id,
+                    public_key=prekey.public_key,
+                )
+            )
+            db.add(
+                DeviceOneTimePreKey(
+                    device_id=device_id,
+                    key_id=prekey.key_id,
+                    public_key=prekey.public_key,
+                )
+            )
+
+        db.commit()
+        audit_logger.info(
+            "x3dh_keys_uploaded user_id=%s device_id=%s one_time_prekeys=%s",
+            user.id,
+            device_id,
+            len(data.one_time_prekeys),
+        )
+    except Exception as exc:
+        db.rollback()
+        audit_logger.exception("x3dh_keys_upload_failed user_id=%s", current_user.id)
+        return {"status": "error", "message": str(exc)}
+    finally:
+        db.close()
+
+    return {"status": "ok", "device_id": device_id, "device_name": device_name}
+
+
+@router.get("/users/devices")
+def list_devices(current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    try:
+        devices = (
+            db.query(Device)
+            .filter(Device.user_id == current_user.id, Device.revoked_at.is_(None))
+            .order_by(Device.created_at.asc(), Device.id.asc())
+            .all()
+        )
+        return {
+            "status": "ok",
+            "devices": [
+                {
+                    "device_id": device.device_id,
+                    "device_name": device.device_name,
+                    "created_at": device.created_at.isoformat() if device.created_at else None,
+                    "last_seen_at": device.last_seen_at.isoformat() if device.last_seen_at else None,
+                    "has_complete_bundle": bool(
+                        device.identity_key
+                        and device.identity_signing_key
+                        and device.signed_prekey
+                        and device.signed_prekey_signature
+                        and device.signed_prekey_key_id
+                    ),
+                }
+                for device in devices
+            ],
+        }
+    finally:
+        db.close()
+
+
+@router.delete("/users/devices/{device_id}")
+def revoke_device(device_id: str, current_user: User = Depends(get_current_user)):
+    normalized_device_id = (device_id or "").strip()
+    if not normalized_device_id:
+        raise HTTPException(status_code=400, detail="Device id is required")
+
+    db: Session = SessionLocal()
+    try:
+        device = (
+            db.query(Device)
+            .filter(Device.user_id == current_user.id, Device.device_id == normalized_device_id, Device.revoked_at.is_(None))
+            .first()
+        )
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        device.revoked_at = utc_now()
+        db.query(DeviceOneTimePreKey).filter(DeviceOneTimePreKey.device_id == normalized_device_id).delete()
+        db.commit()
+        audit_logger.info("device_revoked user_id=%s device_id=%s", current_user.id, normalized_device_id)
+        return {"status": "ok"}
+    finally:
+        db.close()
+
+
+@router.get("/users/key-backup")
+def get_key_backup(current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    try:
+        backup = db.query(EncryptedKeyBackup).filter(EncryptedKeyBackup.user_id == current_user.id).first()
+        if not backup:
+            return {"status": "ok", "backup": None}
+
+        return {"status": "ok", "backup": json.loads(backup.payload)}
+    finally:
+        db.close()
+
+
+@router.put("/users/key-backup")
+def put_key_backup(data: EncryptedKeyBackupSchema, current_user: User = Depends(get_current_user)):
+    db: Session = SessionLocal()
+    try:
+        backup = db.query(EncryptedKeyBackup).filter(EncryptedKeyBackup.user_id == current_user.id).first()
+        payload = json.dumps(data.model_dump(), ensure_ascii=False)
+        if backup:
+            backup.payload = payload
+        else:
+            backup = EncryptedKeyBackup(user_id=current_user.id, payload=payload)
+            db.add(backup)
+
+        db.commit()
+        audit_logger.info("key_backup_synced user_id=%s", current_user.id)
+        return {"status": "ok"}
+    finally:
+        db.close()

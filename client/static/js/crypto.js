@@ -2,21 +2,30 @@ import nacl from "https://cdn.jsdelivr.net/npm/tweetnacl/+esm";
 import naclUtil from "https://cdn.jsdelivr.net/npm/tweetnacl-util/+esm";
 import { deleteDB, openDB } from "https://cdn.jsdelivr.net/npm/idb@7/+esm";
 import { authFetch } from "./authClient.js?v=20260420i";
+import { buildSignedPreKeySignaturePayload } from "./x3dhSignature.js?v=20260601a";
 
 const DEBUG_CRYPTO = false;
 const PREKEY_BATCH_SIZE = 10;
 const MAX_PREKEY_ID = 2147483647;
 const ENCRYPTED_VERSION = 2;
+const SIGNED_PREKEY_SIGNATURE_VERSION = 2;
 const SIGNED_PREKEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000;
 const USED_PREKEY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCAL_RATCHET_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LOCAL_MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const VERIFICATION_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
+const CLOUD_BACKUP_VERSION = 1;
+const CLOUD_BACKUP_KDF_ITERATIONS = 250000;
+const CLOUD_BACKUP_DEBOUNCE_MS = 1200;
+const DEFAULT_DEVICE_NAME = "Browser";
 let unlockedProtectorKey = null;
 const IDB_OPEN_TIMEOUT_MS = 3000;
 let dbOpenPromise = null;
 let dbConnection = null;
 let idbRecoveryAttempted = false;
+let cloudBackupSyncTimer = null;
+let cloudBackupSyncPromise = null;
+let cloudBackupSyncSuppressed = false;
 
 function debugCrypto(...args) {
     if (DEBUG_CRYPTO) {
@@ -126,7 +135,7 @@ export async function generateIdentityKeys() {
     };
 }
 
-export async function generateSigningKeys() {
+export async function generateIdentitySigningKeys() {
     const keyPair = nacl.sign.keyPair();
 
     return {
@@ -154,10 +163,10 @@ function buildPreKeyId() {
 
 export async function saveIdentityKey(keys) {
     const db = await idbOpen();
-    await db.put("keys", await encryptIdentityRecord(keys, db), "identity");
+    await db.put("keys", await encryptIdentityRecord(keys, db), "identity_key");
 }
 
-export async function getPrivateKeyUint8() {
+export async function getIdentityPrivateKeyUint8() {
     const db = await idbOpen();
     const data = await readIdentityRecord(db);
 
@@ -166,9 +175,9 @@ export async function getPrivateKeyUint8() {
     return naclUtil.decodeBase64(data.privateKey);
 }
 
-export async function getPublicKey() {
+export async function getIdentityKey() {
     const db = await idbOpen();
-    const data = await db.get("keys", "identity");
+    const data = await db.get("keys", "identity_key");
 
     return data?.publicKey || null;
 }
@@ -176,6 +185,7 @@ export async function getPublicKey() {
 export async function saveRatchetState(chatId, state) {
     const db = await idbOpen();
     await db.put("ratchets", { ...state, _savedAt: Date.now() }, String(chatId));
+    scheduleCloudBackupSync();
 }
 
 export async function getRatchetState(chatId) {
@@ -192,23 +202,31 @@ export async function getRatchetState(chatId) {
 export async function deleteRatchetState(chatId) {
     const db = await idbOpen();
     await db.delete("ratchets", String(chatId));
+    scheduleCloudBackupSync();
 }
 
 export async function saveCachedMessageText(chatId, messageId, text) {
-    void chatId;
-    void messageId;
-    void text;
+    const db = await idbOpen();
+    await db.put("messages", {
+        text: String(text ?? ""),
+        updatedAt: Date.now()
+    }, `msg:${chatId}:${messageId}`);
+    scheduleCloudBackupSync();
 }
 
 export async function getCachedMessageText(chatId, messageId) {
-    void chatId;
-    void messageId;
-    return null;
+    const db = await idbOpen();
+    const record = await db.get("messages", `msg:${chatId}:${messageId}`);
+    if (typeof record === "string") {
+        return record;
+    }
+    return record?.text || null;
 }
 
 export async function saveLastSeenMessageId(chatId, messageId) {
     const db = await idbOpen();
     await db.put("messages", { messageId, updatedAt: Date.now() }, `meta:lastSeen:${chatId}`);
+    scheduleCloudBackupSync();
 }
 
 export async function getLastSeenMessageId(chatId) {
@@ -223,6 +241,7 @@ export async function getLastSeenMessageId(chatId) {
 export async function saveVerificationStatus(fingerprintValue, isVerified) {
     const db = await idbOpen();
     await db.put("messages", { isVerified, updatedAt: Date.now() }, `verify:${fingerprintValue}`);
+    scheduleCloudBackupSync();
 }
 
 export async function getVerificationStatus(fingerprintValue) {
@@ -231,9 +250,40 @@ export async function getVerificationStatus(fingerprintValue) {
     return Boolean(record?.isVerified);
 }
 
-export async function getSigningPublicKey() {
+export async function saveAttachmentHistory(url, payload) {
+    if (!url || !payload?.key) {
+        return;
+    }
+
     const db = await idbOpen();
-    const data = await readSigningRecord(db);
+    await db.put("messages", {
+        key: String(payload.key),
+        metadata: payload.metadata || null,
+        updatedAt: Date.now()
+    }, `attachment:${url}`);
+    scheduleCloudBackupSync();
+}
+
+export async function getAttachmentHistory(url) {
+    if (!url) {
+        return null;
+    }
+
+    const db = await idbOpen();
+    const record = await db.get("messages", `attachment:${url}`);
+    if (!record?.key) {
+        return null;
+    }
+
+    return {
+        key: record.key,
+        metadata: record.metadata || null
+    };
+}
+
+export async function getIdentitySigningKey() {
+    const db = await idbOpen();
+    const data = await readIdentitySigningRecord(db);
     return data?.publicKey || null;
 }
 
@@ -263,6 +313,7 @@ export async function consumeLocalOneTimePreKey(keyId) {
             used_at: new Date().toISOString()
         };
         await db.put("keys", await encryptOneTimePreKeysRecord(oneTimePreKeys, db), "one_time_prekeys");
+        scheduleCloudBackupSync();
     }
 
     return oneTimePreKeys[keyIndex];
@@ -271,8 +322,8 @@ export async function consumeLocalOneTimePreKey(keyId) {
 export async function getX3dhState() {
     const db = await idbOpen();
     return {
-        identity: await readIdentityRecord(db),
-        signing: await readSigningRecord(db),
+        identityKey: await readIdentityRecord(db),
+        identitySigning: await readIdentitySigningRecord(db),
         signedPreKey: await readSignedPreKeyRecord(db),
         oneTimePreKeys: await readOneTimePreKeysRecord(db)
     };
@@ -282,32 +333,33 @@ export async function initKeysIfNeeded() {
     debugCrypto("[crypto-debug] initKeysIfNeeded: start");
     const db = await idbOpen();
     debugCrypto("[crypto-debug] initKeysIfNeeded: db opened");
-    let identity = await readIdentityRecord(db);
-    debugCrypto("[crypto-debug] initKeysIfNeeded: identity loaded", { hasIdentity: Boolean(identity) });
-    let signing = await readSigningRecord(db);
-    debugCrypto("[crypto-debug] initKeysIfNeeded: signing loaded", { hasSigning: Boolean(signing) });
+    const deviceRegistration = await getOrCreateDeviceRegistration(db);
+    let identityKey = await readIdentityRecord(db);
+    debugCrypto("[crypto-debug] initKeysIfNeeded: identity key loaded", { hasIdentityKey: Boolean(identityKey) });
+    let identitySigning = await readIdentitySigningRecord(db);
+    debugCrypto("[crypto-debug] initKeysIfNeeded: identity signing loaded", { hasIdentitySigning: Boolean(identitySigning) });
     let signedPreKey = await readSignedPreKeyRecord(db);
     debugCrypto("[crypto-debug] initKeysIfNeeded: signed prekey loaded", { hasSignedPreKey: Boolean(signedPreKey) });
     let oneTimePreKeys = await readOneTimePreKeysRecord(db);
     debugCrypto("[crypto-debug] initKeysIfNeeded: one-time prekeys loaded", { count: oneTimePreKeys.length });
 
-    if (!identity) {
-        debugCrypto("Generating new identity encryption keys");
-        identity = await generateIdentityKeys();
-        await db.put("keys", await encryptIdentityRecord(identity, db), "identity");
-        debugCrypto("[crypto-debug] initKeysIfNeeded: identity generated");
+    if (!identityKey) {
+        debugCrypto("Generating new identity keys");
+        identityKey = await generateIdentityKeys();
+        await db.put("keys", await encryptIdentityRecord(identityKey, db), "identity_key");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: identity key generated");
     }
 
-    if (!signing) {
+    if (!identitySigning) {
         debugCrypto("Generating new identity signing keys");
-        signing = await generateSigningKeys();
-        await db.put("keys", await encryptSigningRecord(signing, db), "signing");
-        debugCrypto("[crypto-debug] initKeysIfNeeded: signing generated");
+        identitySigning = await generateIdentitySigningKeys();
+        await db.put("keys", await encryptIdentitySigningRecord(identitySigning, db), "identity_signing_key");
+        debugCrypto("[crypto-debug] initKeysIfNeeded: identity signing generated");
     }
 
     if (!signedPreKey || shouldRotateSignedPreKey(signedPreKey)) {
         debugCrypto("Generating signed prekey");
-        signedPreKey = createSignedPreKey(signing);
+        signedPreKey = createSignedPreKey(identitySigning, identityKey);
         await db.put("keys", await encryptSignedPreKeyRecord(signedPreKey, db), "signed_prekey");
         debugCrypto("[crypto-debug] initKeysIfNeeded: signed prekey generated");
     } else {
@@ -332,27 +384,16 @@ export async function initKeysIfNeeded() {
     debugCrypto("[crypto-debug] initKeysIfNeeded: local cleanup done");
 
     try {
-        const legacyResponse = await authFetch("/users/keys", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                public_key: identity.publicKey
-            })
-        });
-
-        debugCrypto("Legacy key sync:", await legacyResponse.json());
-
         const x3dhResponse = await authFetch("/users/x3dh-keys", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                public_key: identity.publicKey,
-                identity_key: identity.publicKey,
-                signing_key: signing.publicKey,
+                device_id: deviceRegistration.deviceId,
+                device_name: deviceRegistration.deviceName,
+                identity_key: identityKey.publicKey,
+                identity_signing_key: identitySigning.publicKey,
                 signed_prekey: signedPreKey.public_key,
                 signed_prekey_signature: signedPreKey.signature,
                 signed_prekey_key_id: signedPreKey.key_id,
@@ -377,8 +418,15 @@ export async function initKeysIfNeeded() {
         if (!x3dhResponse.ok || x3dhPayload?.status === "error") {
             console.error("X3DH key sync failed:", x3dhPayload);
         } else {
+            if (x3dhPayload?.device_id) {
+                await storeDeviceRegistration(db, {
+                    deviceId: x3dhPayload.device_id,
+                    deviceName: x3dhPayload.device_name || deviceRegistration.deviceName
+                });
+            }
             debugCrypto("X3DH key sync:", x3dhPayload);
         }
+        scheduleCloudBackupSync();
         debugCrypto("[crypto-debug] initKeysIfNeeded: complete");
     } catch (err) {
         console.error("Key upload failed", err);
@@ -386,17 +434,23 @@ export async function initKeysIfNeeded() {
     }
 }
 
-function createSignedPreKey(signingKeys) {
+function createSignedPreKey(identitySigningKeys, identityKeys) {
     const preKey = generatePreKeyPair();
+    const payload = buildSignedPreKeySignaturePayload({
+        identityDhKeyBase64: identityKeys.publicKey,
+        signedPreKeyBase64: preKey.public_key,
+        signedPreKeyKeyId: preKey.key_id
+    });
     const signature = nacl.sign.detached(
-        naclUtil.decodeBase64(preKey.public_key),
-        naclUtil.decodeBase64(signingKeys.privateKey)
+        payload,
+        naclUtil.decodeBase64(identitySigningKeys.privateKey)
     );
 
     return {
         ...preKey,
         signature: naclUtil.encodeBase64(signature),
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        signature_version: SIGNED_PREKEY_SIGNATURE_VERSION
     };
 }
 
@@ -427,6 +481,7 @@ function normalizeSignedPreKey(prekey) {
         private_key: prekey?.private_key ?? prekey?.privateKey ?? null,
         private_key_enc: prekey?.private_key_enc ?? prekey?.privateKeyEnc ?? null,
         created_at: prekey?.created_at ?? prekey?.createdAt ?? new Date().toISOString(),
+        signature_version: prekey?.signature_version ?? prekey?.signatureVersion ?? 1,
         encryptedVersion: prekey?.encryptedVersion ?? prekey?.encrypted_version ?? null
     };
 }
@@ -442,6 +497,10 @@ function normalizePreKeyId(keyId) {
 
 function shouldRotateSignedPreKey(prekey) {
     const normalized = normalizeSignedPreKey(prekey);
+    if (normalized.signature_version !== SIGNED_PREKEY_SIGNATURE_VERSION) {
+        return true;
+    }
+
     const createdAt = Date.parse(normalized.created_at);
 
     if (!Number.isFinite(createdAt)) {
@@ -510,7 +569,10 @@ async function cleanupLocalKeyMaterial(db, signedPreKey) {
     let nextSignedPreKey = signedPreKey;
 
     if (Number.isFinite(signedPreKeyCreatedAt) && now - signedPreKeyCreatedAt > SIGNED_PREKEY_ROTATION_MS * 2) {
-        const rotatedSignedPreKey = createSignedPreKey(await readSigningRecord(db));
+        const rotatedSignedPreKey = createSignedPreKey(
+            await readIdentitySigningRecord(db),
+            await readIdentityRecord(db)
+        );
         await db.put("keys", await encryptSignedPreKeyRecord(rotatedSignedPreKey, db), "signed_prekey");
         nextSignedPreKey = rotatedSignedPreKey;
     }
@@ -562,6 +624,11 @@ async function cleanupStoreEntries(db, storeName, shouldDelete) {
 export async function resetLocalCryptoState() {
     unlockedProtectorKey = null;
     idbRecoveryAttempted = false;
+    if (cloudBackupSyncTimer) {
+        window.clearTimeout(cloudBackupSyncTimer);
+        cloudBackupSyncTimer = null;
+    }
+    cloudBackupSyncPromise = null;
     closeIdbConnection();
     await deleteDB("e2ee_chat");
 }
@@ -595,6 +662,104 @@ export async function ensureLocalAccountBinding(accountData) {
     return existing?.binding ? existing.binding !== binding : false;
 }
 
+export async function getCurrentDeviceRegistration() {
+    const db = await idbOpen();
+    return getOrCreateDeviceRegistration(db);
+}
+
+export async function restoreCloudBackupIfNeeded(accountData) {
+    const password = getCloudBackupPassword();
+    if (!password) {
+        return false;
+    }
+
+    const response = await authFetch("/users/key-backup");
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.status !== "ok" || !payload?.backup) {
+        return false;
+    }
+
+    const db = await idbOpen();
+    const snapshot = await decryptCloudBackupSnapshot(payload.backup, password);
+    if (!snapshot || typeof snapshot !== "object") {
+        return false;
+    }
+
+    const expectedBinding = buildAccountBinding(accountData);
+    const snapshotBinding = snapshot.account_binding?.binding || null;
+    if (expectedBinding && snapshotBinding && snapshotBinding !== expectedBinding) {
+        console.warn("Cloud backup binding mismatch; skipping restore");
+        return false;
+    }
+
+    await applyCloudBackupSnapshot(snapshot, db, accountData);
+    return true;
+}
+
+export function scheduleCloudBackupSync() {
+    if (cloudBackupSyncSuppressed || cloudBackupSyncPromise) {
+        return;
+    }
+
+    const password = getCloudBackupPassword();
+    if (!password) {
+        return;
+    }
+
+    if (cloudBackupSyncTimer) {
+        window.clearTimeout(cloudBackupSyncTimer);
+    }
+
+    cloudBackupSyncTimer = window.setTimeout(() => {
+        cloudBackupSyncTimer = null;
+        void syncCloudBackupNow().catch((error) => {
+            console.warn("Cloud backup sync failed:", error);
+        });
+    }, CLOUD_BACKUP_DEBOUNCE_MS);
+}
+
+export async function syncCloudBackupNow() {
+    if (cloudBackupSyncSuppressed) {
+        return false;
+    }
+
+    const password = getCloudBackupPassword();
+    if (!password) {
+        return false;
+    }
+
+    if (cloudBackupSyncPromise) {
+        return cloudBackupSyncPromise;
+    }
+
+    cloudBackupSyncPromise = (async () => {
+        const db = await idbOpen();
+        const snapshot = await buildCloudBackupSnapshot(db);
+        if (!snapshot) {
+            return false;
+        }
+
+        const encryptedPayload = await encryptCloudBackupSnapshot(snapshot, password);
+        const response = await authFetch("/users/key-backup", {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(encryptedPayload)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.status !== "ok") {
+            throw new Error(payload?.detail || "Cloud key backup update failed");
+        }
+
+        return true;
+    })().finally(() => {
+        cloudBackupSyncPromise = null;
+    });
+
+    return cloudBackupSyncPromise;
+}
+
 async function clearStoredPlaintextMessages(db) {
     const tx = db.transaction("messages", "readwrite");
     let cursor = await tx.store.openCursor();
@@ -609,8 +774,159 @@ async function clearStoredPlaintextMessages(db) {
     await tx.done;
 }
 
+async function buildCloudBackupSnapshot(db) {
+    const accountBinding = await db.get("keys", "account_binding");
+    if (!accountBinding?.binding) {
+        return null;
+    }
+
+    return {
+        backup_version: CLOUD_BACKUP_VERSION,
+        exported_at: new Date().toISOString(),
+        account_binding: {
+            ...accountBinding,
+            updatedAt: Date.now()
+        },
+        messages: await exportMessageMetadata(db)
+    };
+}
+
+async function exportStoreEntries(db, storeName) {
+    const tx = db.transaction(storeName, "readonly");
+    const entries = [];
+    let cursor = await tx.store.openCursor();
+
+    while (cursor) {
+        entries.push({
+            key: String(cursor.key),
+            value: cursor.value
+        });
+        cursor = await cursor.continue();
+    }
+
+    await tx.done;
+    return entries;
+}
+
+async function exportMessageMetadata(db) {
+    const tx = db.transaction("messages", "readonly");
+    const entries = [];
+    let cursor = await tx.store.openCursor();
+
+    while (cursor) {
+        const key = String(cursor.key);
+        if (
+            key.startsWith("verify:")
+            || key.startsWith("meta:lastSeen:")
+            || key.startsWith("msg:")
+            || key.startsWith("attachment:")
+        ) {
+            entries.push({
+                key,
+                value: cursor.value
+            });
+        }
+        cursor = await cursor.continue();
+    }
+
+    await tx.done;
+    return entries;
+}
+
+async function encryptCloudBackupSnapshot(snapshot, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveCloudBackupKey(password, salt);
+    const plaintextBytes = new TextEncoder().encode(JSON.stringify(snapshot));
+    const ciphertext = await crypto.subtle.encrypt(
+        {
+            name: "AES-GCM",
+            iv
+        },
+        key,
+        plaintextBytes
+    );
+
+    return {
+        version: CLOUD_BACKUP_VERSION,
+        salt: encodeBytesToBase64(salt),
+        iv: encodeBytesToBase64(iv),
+        ciphertext: encodeBytesToBase64(new Uint8Array(ciphertext)),
+        backup_version: snapshot.backup_version || CLOUD_BACKUP_VERSION,
+        updated_at_client: new Date().toISOString()
+    };
+}
+
+async function decryptCloudBackupSnapshot(payload, password) {
+    const key = await deriveCloudBackupKey(password, decodeBase64ToBytes(payload.salt));
+    const plaintextBuffer = await crypto.subtle.decrypt(
+        {
+            name: "AES-GCM",
+            iv: decodeBase64ToBytes(payload.iv)
+        },
+        key,
+        decodeBase64ToBytes(payload.ciphertext)
+    );
+
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(plaintextBuffer)));
+}
+
+async function deriveCloudBackupKey(password, saltBytes) {
+    const passwordKey = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(password),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+    );
+
+    return crypto.subtle.deriveKey(
+        {
+            name: "PBKDF2",
+            salt: saltBytes,
+            iterations: CLOUD_BACKUP_KDF_ITERATIONS,
+            hash: "SHA-256"
+        },
+        passwordKey,
+        {
+            name: "AES-GCM",
+            length: 256
+        },
+        false,
+        ["encrypt", "decrypt"]
+    );
+}
+
+async function applyCloudBackupSnapshot(snapshot, db, accountData) {
+    void accountData;
+    cloudBackupSyncSuppressed = true;
+    try {
+        await clearStore(db, "messages");
+
+        const accountBinding = snapshot.account_binding || buildDefaultAccountBindingRecord(accountData);
+        if (accountBinding?.binding) {
+            await db.put("keys", {
+                ...accountBinding,
+                updatedAt: Date.now()
+            }, "account_binding");
+        }
+
+        for (const entry of snapshot.messages || []) {
+            await db.put("messages", entry.value, String(entry.key));
+        }
+    } finally {
+        cloudBackupSyncSuppressed = false;
+    }
+}
+
+async function clearStore(db, storeName) {
+    const tx = db.transaction(storeName, "readwrite");
+    await tx.store.clear();
+    await tx.done;
+}
+
 async function readIdentityRecord(db) {
-    const record = await db.get("keys", "identity");
+    const record = await db.get("keys", "identity_key");
     if (!record) {
         return null;
     }
@@ -620,12 +936,12 @@ async function readIdentityRecord(db) {
         publicKey: record.publicKey,
         privateKey
     };
-    await db.put("keys", await encryptIdentityRecord(normalized, db), "identity");
+    await db.put("keys", await encryptIdentityRecord(normalized, db), "identity_key");
     return normalized;
 }
 
-async function readSigningRecord(db) {
-    const record = await db.get("keys", "signing");
+async function readIdentitySigningRecord(db) {
+    const record = await db.get("keys", "identity_signing_key");
     if (!record) {
         return null;
     }
@@ -635,7 +951,7 @@ async function readSigningRecord(db) {
         publicKey: record.publicKey,
         privateKey
     };
-    await db.put("keys", await encryptSigningRecord(normalized, db), "signing");
+    await db.put("keys", await encryptIdentitySigningRecord(normalized, db), "identity_signing_key");
     return normalized;
 }
 
@@ -688,18 +1004,18 @@ async function readOneTimePreKeysRecord(db) {
     return decrypted;
 }
 
-async function encryptIdentityRecord(identity, db) {
+async function encryptIdentityRecord(identityKey, db) {
     return {
-        publicKey: identity.publicKey,
-        privateKeyEnc: await encryptPrivateValue(identity.privateKey, db),
+        publicKey: identityKey.publicKey,
+        privateKeyEnc: await encryptPrivateValue(identityKey.privateKey, db),
         encryptedVersion: ENCRYPTED_VERSION
     };
 }
 
-async function encryptSigningRecord(signing, db) {
+async function encryptIdentitySigningRecord(identitySigning, db) {
     return {
-        publicKey: signing.publicKey,
-        privateKeyEnc: await encryptPrivateValue(signing.privateKey, db),
+        publicKey: identitySigning.publicKey,
+        privateKeyEnc: await encryptPrivateValue(identitySigning.privateKey, db),
         encryptedVersion: ENCRYPTED_VERSION
     };
 }
@@ -714,6 +1030,7 @@ async function encryptSignedPreKeyRecord(prekey, db) {
         is_used: Boolean(normalized.is_used),
         used_at: normalized.used_at ?? null,
         signature: normalized.signature,
+        signature_version: normalized.signature_version ?? SIGNED_PREKEY_SIGNATURE_VERSION,
         encryptedVersion: ENCRYPTED_VERSION
     };
 }
@@ -819,6 +1136,87 @@ function decodeBase64ToBytes(value) {
 
 function encodeBytesToBase64(value) {
     return naclUtil.encodeBase64(value);
+}
+
+function getCloudBackupPassword() {
+    try {
+        return window.sessionStorage.getItem("e2ee_backup_password") || "";
+    } catch {
+        return "";
+    }
+}
+
+function buildDefaultAccountBindingRecord(accountData) {
+    const binding = buildAccountBinding(accountData);
+    if (!binding) {
+        return null;
+    }
+
+    return {
+        binding,
+        email: accountData?.email || "",
+        userId: accountData?.id ?? null,
+        accountInstanceId: accountData?.account_instance_id || "",
+        updatedAt: Date.now()
+    };
+}
+
+async function getOrCreateDeviceRegistration(db) {
+    const existing = await db.get("keys", "device_registration");
+    if (existing?.deviceId) {
+        syncDeviceRegistrationToSession(existing);
+        return existing;
+    }
+
+    const created = {
+        deviceId: buildDeviceId(),
+        deviceName: buildDeviceName(),
+        createdAt: Date.now()
+    };
+    await storeDeviceRegistration(db, created);
+    return created;
+}
+
+async function storeDeviceRegistration(db, registration) {
+    const normalized = {
+        deviceId: String(registration?.deviceId || buildDeviceId()),
+        deviceName: String(registration?.deviceName || buildDeviceName()).slice(0, 120),
+        createdAt: Number(registration?.createdAt || Date.now())
+    };
+    await db.put("keys", normalized, "device_registration");
+    syncDeviceRegistrationToSession(normalized);
+    return normalized;
+}
+
+function syncDeviceRegistrationToSession(registration) {
+    try {
+        window.sessionStorage.setItem("e2ee_device_id", registration.deviceId);
+        window.sessionStorage.setItem("e2ee_device_name", registration.deviceName);
+    } catch {}
+}
+
+function buildDeviceId() {
+    if (typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return `browser-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function buildDeviceName() {
+    const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    if (/firefox/i.test(userAgent)) {
+        return "Firefox browser";
+    }
+    if (/edg/i.test(userAgent)) {
+        return "Edge browser";
+    }
+    if (/chrome/i.test(userAgent)) {
+        return "Chrome browser";
+    }
+    if (/safari/i.test(userAgent) && !/chrome|chromium|edg/i.test(userAgent)) {
+        return "Safari browser";
+    }
+    return DEFAULT_DEVICE_NAME;
 }
 
 function buildAccountBinding(accountData) {

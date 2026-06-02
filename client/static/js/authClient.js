@@ -21,6 +21,10 @@ function buildAuthHeaders(init = {}) {
         ...wantsJsonResponse(),
         ...(init.headers || {})
     };
+    const deviceId = readCurrentDeviceId();
+    if (deviceId) {
+        headers["X-Device-ID"] = deviceId;
+    }
 
     const method = String(init.method || "GET").toUpperCase();
     if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes(method)) {
@@ -31,6 +35,14 @@ function buildAuthHeaders(init = {}) {
     }
 
     return headers;
+}
+
+function readCurrentDeviceId() {
+    try {
+        return window.sessionStorage.getItem("e2ee_device_id") || "";
+    } catch {
+        return "";
+    }
 }
 
 export async function refreshAccessToken() {

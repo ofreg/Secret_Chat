@@ -701,15 +701,15 @@
 }
 </style>
 
-{% if other_public_key %}
+{% if other_identity_key %}
 <script>
-window.otherPublicKey = "{{ other_public_key }}";
 window.otherIdentityKey = "{{ other_identity_key }}";
+window.otherIdentitySigningKey = "{{ other_identity_signing_key }}";
 </script>
 {% endif %}
 
 <script type="module" src="/static/js/searchBootstrap.js?v=20260421a"></script>
-<script type="module" src="/static/js/messages.js?v=20260514a"></script>
+<script type="module" src="/static/js/messages.js?v=20260602b"></script>
 
 <div class="container">
     <div class="sidebar">

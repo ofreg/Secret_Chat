@@ -1,15 +1,26 @@
 import { nacl, naclUtil } from "./crypto.js?v=20260420i";
 import { concatChunks, hkdf } from "./hkdf.js?v=20260420i";
+import { buildSignedPreKeySignaturePayload } from "./x3dhSignature.js?v=20260601a";
 
-export function verifySignedPreKey({ signingKeyBase64, signedPreKeyBase64, signatureBase64 }) {
-    if (!signingKeyBase64 || !signedPreKeyBase64 || !signatureBase64) {
+export function verifySignedPreKey({
+    identitySigningKeyBase64,
+    identityKeyBase64,
+    signedPreKeyBase64,
+    signedPreKeyKeyId,
+    signatureBase64
+}) {
+    if (!identitySigningKeyBase64 || !identityKeyBase64 || !signedPreKeyBase64 || !signatureBase64 || !signedPreKeyKeyId) {
         return false;
     }
 
     return nacl.sign.detached.verify(
-        naclUtil.decodeBase64(signedPreKeyBase64),
+        buildSignedPreKeySignaturePayload({
+            identityDhKeyBase64: identityKeyBase64,
+            signedPreKeyBase64,
+            signedPreKeyKeyId
+        }),
         naclUtil.decodeBase64(signatureBase64),
-        naclUtil.decodeBase64(signingKeyBase64)
+        naclUtil.decodeBase64(identitySigningKeyBase64)
     );
 }
 

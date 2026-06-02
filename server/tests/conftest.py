@@ -36,15 +36,22 @@ from app.utils.websocket_manager import manager
 
 
 def prepare_csrf_client(test_client: TestClient) -> TestClient:
-    original_post = test_client.post
     test_client.get("/")
 
-    def csrf_post(*args, **kwargs):
-        headers = dict(kwargs.pop("headers", {}) or {})
-        headers.setdefault("X-CSRF-Token", test_client.cookies.get("csrf_token", ""))
-        return original_post(*args, headers=headers, **kwargs)
+    def wrap_with_csrf(method_name: str):
+        original_method = getattr(test_client, method_name)
 
-    test_client.post = csrf_post
+        def wrapped(*args, **kwargs):
+            headers = dict(kwargs.pop("headers", {}) or {})
+            headers.setdefault("X-CSRF-Token", test_client.cookies.get("csrf_token", ""))
+            return original_method(*args, headers=headers, **kwargs)
+
+        return wrapped
+
+    test_client.post = wrap_with_csrf("post")
+    test_client.put = wrap_with_csrf("put")
+    test_client.patch = wrap_with_csrf("patch")
+    test_client.delete = wrap_with_csrf("delete")
     return test_client
 
 
@@ -80,7 +87,9 @@ def reset_state():
     forgot_password_attempts.clear()
     manager.chat_connections.clear()
     manager.chat_user_connections.clear()
+    manager.chat_device_connections.clear()
     manager.user_connections.clear()
+    manager.user_device_connections.clear()
     manager.online_users.clear()
 
     yield
@@ -88,7 +97,9 @@ def reset_state():
     dispose_test_database_connections()
     manager.chat_connections.clear()
     manager.chat_user_connections.clear()
+    manager.chat_device_connections.clear()
     manager.user_connections.clear()
+    manager.user_device_connections.clear()
     manager.online_users.clear()
     app.dependency_overrides.clear()
 

@@ -3,7 +3,7 @@ import QRCode from "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm";
 export async function updateVerificationUiFlow({
     fingerprint,
     verificationKey,
-    myIdentityKey,
+    myIdentitySigningKey,
     getVerificationStatus,
     saveVerificationStatus,
     resetLocalCryptoState
@@ -43,7 +43,7 @@ export async function updateVerificationUiFlow({
         await updateVerificationUiFlow({
             fingerprint,
             verificationKey,
-            myIdentityKey,
+            myIdentitySigningKey,
             getVerificationStatus,
             saveVerificationStatus,
             resetLocalCryptoState
@@ -56,7 +56,7 @@ export async function updateVerificationUiFlow({
         await updateVerificationUiFlow({
             fingerprint,
             verificationKey,
-            myIdentityKey,
+            myIdentitySigningKey,
             getVerificationStatus,
             saveVerificationStatus,
             resetLocalCryptoState
@@ -88,8 +88,8 @@ export async function updateVerificationUiFlow({
     const qrPayload = JSON.stringify({
         type: "chat-safety-number",
         safety_number: fingerprint,
-        my_identity_key: myIdentityKey,
-        identity_key: verificationKey
+        my_identity_signing_key: myIdentitySigningKey,
+        identity_signing_key: verificationKey
     });
 
     await QRCode.toCanvas(qrCanvas, qrPayload, {

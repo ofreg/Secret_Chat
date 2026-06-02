@@ -101,19 +101,22 @@ async def add_security_headers(request: Request, call_next):
 ensure_schema_sql = [
     ("users", "account_instance_id", "ALTER TABLE users ADD COLUMN account_instance_id TEXT"),
     ("users", "avatar_filename", "ALTER TABLE users ADD COLUMN avatar_filename TEXT"),
-    ("users", "signing_key", "ALTER TABLE users ADD COLUMN signing_key TEXT"),
     ("users", "signed_prekey", "ALTER TABLE users ADD COLUMN signed_prekey TEXT"),
     ("users", "signed_prekey_signature", "ALTER TABLE users ADD COLUMN signed_prekey_signature TEXT"),
     ("users", "signed_prekey_key_id", "ALTER TABLE users ADD COLUMN signed_prekey_key_id INTEGER"),
-    ("messages", "delivered_at", "ALTER TABLE messages ADD COLUMN delivered_at DATETIME"),
-    ("messages", "read_at", "ALTER TABLE messages ADD COLUMN read_at DATETIME"),
+    ("messages", "delivered_at", "ALTER TABLE messages ADD COLUMN delivered_at TIMESTAMP"),
+    ("messages", "read_at", "ALTER TABLE messages ADD COLUMN read_at TIMESTAMP"),
     ("messages", "attachment_kind", "ALTER TABLE messages ADD COLUMN attachment_kind TEXT"),
     ("messages", "attachment_url", "ALTER TABLE messages ADD COLUMN attachment_url TEXT"),
     ("messages", "attachment_name", "ALTER TABLE messages ADD COLUMN attachment_name TEXT"),
     ("messages", "attachment_mime_type", "ALTER TABLE messages ADD COLUMN attachment_mime_type TEXT"),
     ("messages", "attachment_size", "ALTER TABLE messages ADD COLUMN attachment_size INTEGER"),
     ("messages", "attachment_meta", "ALTER TABLE messages ADD COLUMN attachment_meta TEXT"),
+    ("messages", "sender_device_id", "ALTER TABLE messages ADD COLUMN sender_device_id TEXT"),
 ]
+
+# Let SQLAlchemy create all missing tables with dialect-correct types first.
+Base.metadata.create_all(bind=engine)
 
 inspector = inspect(engine)
 existing_tables = set(inspector.get_table_names())
@@ -129,8 +132,6 @@ with engine.begin() as connection:
             except OperationalError as error:
                 if "duplicate column name" not in str(error).lower():
                     raise
-
-Base.metadata.create_all(bind=engine)
 
 # ---------------------- Роутери ----------------------
 app.include_router(auth.router)

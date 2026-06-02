@@ -16,17 +16,22 @@ export async function sendCurrentMessage({
     getInput,
     getAttachmentInput,
     getChatSocket,
-    getMyPublicKey,
+    getMyIdentityKey,
     getMyPrivateKey,
-    getOtherPublicKey,
+    getCurrentDeviceId,
+    getOwnDeviceBundles,
+    getOtherIdentityKey,
     getOtherPrekeyBundle,
+    getOtherDeviceBundles,
     refreshChatKeys,
     isKeysReady,
     logChatState,
     getRatchetState,
     deleteRatchetState,
     encryptMessage,
+    encryptMessageForDevices,
     encryptAttachmentData,
+    saveAttachmentHistory,
     authFetch,
     onAttachmentSent,
     setAttachmentFeedback
@@ -37,12 +42,15 @@ export async function sendCurrentMessage({
     const input = getInput();
     const attachmentInput = getAttachmentInput?.();
     const chatSocket = getChatSocket();
-    const myPublicKey = getMyPublicKey();
-    const myPrivateKey = getMyPrivateKey();
-    const otherPublicKey = getOtherPublicKey();
+    const myIdentityKey = getMyIdentityKey();
+    const myIdentityPrivateKey = getMyPrivateKey();
+    const currentDeviceId = getCurrentDeviceId?.() || null;
+    const ownDeviceBundles = getOwnDeviceBundles?.() || [];
+    const otherIdentityKey = getOtherIdentityKey();
     const otherPrekeyBundle = getOtherPrekeyBundle();
+    const otherDeviceBundles = getOtherDeviceBundles?.() || [];
 
-    if (!input || !chatSocket || !myPublicKey) {
+    if (!input || !chatSocket || !myIdentityKey) {
         logChatState("send blocked: base prerequisites missing", {
             hasInput: Boolean(input)
         }, "warn");
@@ -57,9 +65,9 @@ export async function sendCurrentMessage({
     }
 
     if (selectedFile) {
-        if (!otherPublicKey) {
+        if (!otherIdentityKey) {
             const refreshed = await refreshChatKeys(chatId);
-            if (!refreshed || !getOtherPublicKey()) {
+            if (!refreshed || !getOtherIdentityKey()) {
                 logChatState("media send blocked: recipient keys are not available yet", null, "warn");
                 return;
             }
@@ -92,8 +100,11 @@ export async function sendCurrentMessage({
                     mime_type: selectedFile.type || "application/octet-stream",
                     size: selectedFile.size
                 },
-                recipientPublicBase64: getOtherPublicKey(),
-                senderPublicBase64: myPublicKey
+                recipientIdentityKeyBase64: getOtherIdentityKey(),
+                senderIdentityKeyBase64: myIdentityKey,
+                recipientDeviceBundles: getOtherDeviceBundles?.() || [],
+                senderDeviceBundles: ownDeviceBundles,
+                currentDeviceId
             });
 
             setAttachmentFeedback?.("Uploading media...", "success");
@@ -121,14 +132,26 @@ export async function sendCurrentMessage({
 
             let encryptedCaption = "";
             if (messageText) {
-                encryptedCaption = await encryptMessage({
-                    chatId,
-                    message: messageText,
-                    recipientPublicBase64: getOtherPublicKey(),
-                    recipientPrekeyBundle: getOtherPrekeyBundle(),
-                    senderPublicBase64: myPublicKey,
-                    myPrivateKeyUint8: myPrivateKey
-                });
+                if (otherDeviceBundles.length) {
+                    encryptedCaption = await encryptMessageForDevices({
+                        chatId,
+                        message: messageText,
+                        recipientDeviceBundles: otherDeviceBundles,
+                        senderDeviceBundles: ownDeviceBundles,
+                        currentDeviceId,
+                        senderIdentityKeyBase64: myIdentityKey,
+                        myPrivateKeyUint8: myIdentityPrivateKey
+                    });
+                } else {
+                    encryptedCaption = await encryptMessage({
+                        chatId,
+                        message: messageText,
+                        recipientIdentityKeyBase64: getOtherIdentityKey(),
+                        recipientPrekeyBundle: getOtherPrekeyBundle(),
+                        senderIdentityKeyBase64: myIdentityKey,
+                        myPrivateKeyUint8: myIdentityPrivateKey
+                    });
+                }
             }
 
             chatSocket.send(JSON.stringify({
@@ -143,6 +166,7 @@ export async function sendCurrentMessage({
                 },
                 caption: encryptedCaption
             }));
+            await saveAttachmentHistory?.(uploadPayload.attachment.url, encryptedAttachment.historySecret);
             input.value = "";
             if (attachmentInput) {
                 attachmentInput.value = "";
@@ -157,7 +181,7 @@ export async function sendCurrentMessage({
         }
     }
 
-    if (!otherPublicKey) {
+    if (!otherIdentityKey) {
         const refreshed = await refreshChatKeys(chatId);
         if (!refreshed) {
             logChatState("send blocked: recipient keys are not available yet", null, "warn");
@@ -182,10 +206,10 @@ export async function sendCurrentMessage({
     }
 
     const currentRatchetState = await getRatchetState(chatId);
-    const hasBootstrapBundle = Boolean(getOtherPublicKey() && getOtherPrekeyBundle()?.signed_prekey);
+    const hasBootstrapBundle = Boolean(getOtherIdentityKey() && getOtherPrekeyBundle()?.signed_prekey);
     if (!currentRatchetState && !hasBootstrapBundle) {
         await refreshChatKeys(chatId);
-        if (!(getOtherPublicKey() && getOtherPrekeyBundle()?.signed_prekey)) {
+        if (!(getOtherIdentityKey() && getOtherPrekeyBundle()?.signed_prekey)) {
             logChatState("send blocked: missing X3DH bootstrap bundle for first message", {
                 hasSignedPrekey: Boolean(getOtherPrekeyBundle()?.signed_prekey),
                 hasOneTimePrekey: Boolean(getOtherPrekeyBundle()?.one_time_prekey?.public_key)
@@ -200,14 +224,24 @@ export async function sendCurrentMessage({
     }
 
     try {
-        const payload = await encryptMessage({
-            chatId,
-            message: messageText,
-            recipientPublicBase64: getOtherPublicKey(),
-            recipientPrekeyBundle: getOtherPrekeyBundle(),
-            senderPublicBase64: myPublicKey,
-            myPrivateKeyUint8: myPrivateKey
-        });
+        const payload = otherDeviceBundles.length
+            ? await encryptMessageForDevices({
+                chatId,
+                message: messageText,
+                recipientDeviceBundles: otherDeviceBundles,
+                senderDeviceBundles: ownDeviceBundles,
+                currentDeviceId,
+                senderIdentityKeyBase64: myIdentityKey,
+                myPrivateKeyUint8: myIdentityPrivateKey
+            })
+            : await encryptMessage({
+                chatId,
+                message: messageText,
+                recipientIdentityKeyBase64: getOtherIdentityKey(),
+                recipientPrekeyBundle: getOtherPrekeyBundle(),
+                senderIdentityKeyBase64: myIdentityKey,
+                myPrivateKeyUint8: myIdentityPrivateKey
+            });
 
         chatSocket.send(JSON.stringify(payload));
         input.value = "";
@@ -232,24 +266,26 @@ export async function initializeChatFlow({
     const data = await res.json();
     logChatState("initial chat keys response", {
         responseStatus: data.status,
-        responseHasPublicKey: Boolean(data.public_key),
         responseHasIdentityKey: Boolean(data.identity_key),
-        responseHasPrekeyBundle: Boolean(data.prekey_bundle)
+        responseHasIdentitySigningKey: Boolean(data.identity_signing_key),
+        responseHasPrekeyBundle: Boolean(data.prekey_bundle),
+        responseDeviceBundleCount: Array.isArray(data.device_bundles) ? data.device_bundles.length : 0
     });
 
     if (data.status !== "ok") {
         return;
     }
 
-    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
+    await applyChatKeys(data.identity_key, data.identity_signing_key, data.prekey_bundle, data.username, data, data.device_bundles || []);
     openChatSocket(chatId);
     scheduleChatKeyRefresh(chatId);
 }
 
 export async function applyChatKeysFlow({
-    publicKey,
     identityKey,
+    identitySigningKey,
     prekeyBundle = null,
+    deviceBundles = [],
     username = "",
     avatarData = null,
     setOtherKeys,
@@ -260,16 +296,18 @@ export async function applyChatKeysFlow({
     updateChatReadiness
 }) {
     setOtherKeys({
-        publicKey: publicKey || null,
         identityKey: identityKey || null,
-        prekeyBundle: prekeyBundle || null
+        identitySigningKey: identitySigningKey || null,
+        prekeyBundle: prekeyBundle || null,
+        deviceBundles: Array.isArray(deviceBundles) ? deviceBundles : []
     });
 
     logChatState("applied chat keys", {
         username,
-        appliedHasPublicKey: Boolean(publicKey),
         appliedHasIdentityKey: Boolean(identityKey),
-        appliedHasPrekeyBundle: Boolean(prekeyBundle)
+        appliedHasIdentitySigningKey: Boolean(identitySigningKey),
+        appliedHasPrekeyBundle: Boolean(prekeyBundle),
+        deviceBundleCount: Array.isArray(deviceBundles) ? deviceBundles.length : 0
     });
 
     setChatUserName?.(username);
@@ -293,39 +331,38 @@ export async function refreshChatKeysFlow({
     const data = await res.json();
     logChatState("refresh chat keys response", {
         responseStatus: data.status,
-        responseHasPublicKey: Boolean(data.public_key),
         responseHasIdentityKey: Boolean(data.identity_key),
-        responseHasPrekeyBundle: Boolean(data.prekey_bundle)
+        responseHasIdentitySigningKey: Boolean(data.identity_signing_key),
+        responseHasPrekeyBundle: Boolean(data.prekey_bundle),
+        responseDeviceBundleCount: Array.isArray(data.device_bundles) ? data.device_bundles.length : 0
     });
-    if (data.status !== "ok" || !data.public_key) {
+    if (data.status !== "ok" || !data.identity_key) {
         return false;
     }
 
-    await applyChatKeys(data.public_key, data.identity_key, data.prekey_bundle, data.username, data);
+    await applyChatKeys(data.identity_key, data.identity_signing_key, data.prekey_bundle, data.username, data, data.device_bundles || []);
     return true;
 }
 
 export async function refreshSafetyNumberFlow({
-    otherIdentityKey,
-    otherPublicKey,
-    myIdentityKey,
+    otherIdentitySigningKey,
+    myIdentitySigningKey,
     deriveSafetyNumber,
     setCurrentFingerprint,
     updateVerificationUi,
     logChatState
 }) {
-    const verificationKey = otherIdentityKey || otherPublicKey;
-    if (!verificationKey || !myIdentityKey) {
+    if (!otherIdentitySigningKey || !myIdentitySigningKey) {
         logChatState("safety number skipped: missing key material", {
-            hasVerificationKey: Boolean(verificationKey),
-            hasMyIdentityKey: Boolean(myIdentityKey)
+            hasVerificationKey: Boolean(otherIdentitySigningKey),
+            hasMyIdentityKey: Boolean(myIdentitySigningKey)
         }, "warn");
         return;
     }
 
-    const fp = await deriveSafetyNumber(myIdentityKey, verificationKey);
+    const fp = await deriveSafetyNumber(myIdentitySigningKey, otherIdentitySigningKey);
     setCurrentFingerprint(fp);
     const el = document.getElementById("fingerprint");
     if (el) el.innerText = fp;
-    await updateVerificationUi(fp, verificationKey, myIdentityKey);
+    await updateVerificationUi(fp, otherIdentitySigningKey, myIdentitySigningKey);
 }

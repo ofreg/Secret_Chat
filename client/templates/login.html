@@ -40,4 +40,20 @@
         </div>
     </section>
 </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const form = document.querySelector(".form-stack");
+    const passwordInput = form?.querySelector('input[name="password"]');
+    if (!form || !passwordInput) {
+        return;
+    }
+
+    form.addEventListener("submit", () => {
+        try {
+            window.sessionStorage.setItem("e2ee_backup_password", passwordInput.value || "");
+        } catch {}
+    });
+});
+</script>
 {% endblock %}

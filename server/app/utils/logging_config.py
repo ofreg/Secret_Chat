@@ -13,6 +13,20 @@ APP_LOG_MAX_BYTES = int(os.getenv("APP_LOG_MAX_BYTES", 1_048_576))
 APP_LOG_BACKUP_COUNT = int(os.getenv("APP_LOG_BACKUP_COUNT", 5))
 
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except PermissionError:
+            pass
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            return
+
+
 def setup_logging() -> logging.Logger:
     logger = logging.getLogger("app")
     if getattr(logger, "_diplom_logging_configured", False):
@@ -24,7 +38,7 @@ def setup_logging() -> logging.Logger:
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
     )
 
-    app_handler = RotatingFileHandler(
+    app_handler = SafeRotatingFileHandler(
         LOG_DIR / "app.log",
         maxBytes=APP_LOG_MAX_BYTES,
         backupCount=APP_LOG_BACKUP_COUNT,
@@ -33,7 +47,7 @@ def setup_logging() -> logging.Logger:
     app_handler.setLevel(getattr(logging, APP_LOG_LEVEL, logging.INFO))
     app_handler.setFormatter(formatter)
 
-    error_handler = RotatingFileHandler(
+    error_handler = SafeRotatingFileHandler(
         LOG_DIR / "error.log",
         maxBytes=APP_LOG_MAX_BYTES,
         backupCount=APP_LOG_BACKUP_COUNT,

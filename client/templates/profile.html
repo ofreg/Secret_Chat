@@ -68,12 +68,29 @@
             </aside>
         </div>
     </section>
+
+    <section class="profile-card">
+        <div class="profile-grid">
+            <div>
+                <h2 class="card-title">Пристрої</h2>
+                <p class="card-copy">
+                    Тут відображаються браузери, прив'язані до вашого акаунта. Для поточної Signal-style
+                    multi-device моделі кожен браузер працює як окремий E2EE-пристрій.
+                </p>
+                <p class="card-copy" id="devicesPanelStatus">Завантаження списку пристроїв...</p>
+            </div>
+
+            <aside class="panel-card">
+                <div class="profile-facts" id="devicesPanelList"></div>
+            </aside>
+        </div>
+    </section>
 </div>
 
 {% endblock %}
 
 {% block scripts %}
 {% if init_keys %}
-<script type="module" src="/static/js/profileBootstrap.js?v=20260430a"></script>
+<script type="module" src="/static/js/profileBootstrap.js?v=20260602b"></script>
 {% endif %}
 {% endblock %}

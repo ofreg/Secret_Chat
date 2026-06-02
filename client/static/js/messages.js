@@ -1,20 +1,25 @@
 import {
+    ensureLocalAccountBinding,
     deleteRatchetState,
     deriveSafetyNumber,
-    getPrivateKeyUint8,
-    getPublicKey,
+    getIdentityKey,
+    getIdentityPrivateKeyUint8,
+    getIdentitySigningKey,
+    saveAttachmentHistory,
     getRatchetState,
     getVerificationStatus,
     initKeysIfNeeded,
+    restoreCloudBackupIfNeeded,
     resetLocalCryptoState,
     saveVerificationStatus
-} from "./crypto.js?v=20260420i";
-import { authFetch, ensureSession } from "./authClient.js?v=20260420i";
+} from "./crypto.js?v=20260602a";
+import { authFetch, ensureSession } from "./authClient.js?v=20260601b";
 import {
     decryptAttachmentData,
     encryptAttachmentData,
-    encryptMessage
-} from "./chatCrypto.js?v=20260514a";
+    encryptMessage,
+    encryptMessageForDevices
+} from "./chatCrypto.js?v=20260602b";
 import {
     bindMediaViewerControls,
     bindAttachmentAlertControls,
@@ -33,22 +38,25 @@ import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260430b";
-import { createHistoryController } from "./messagesHistory.js?v=20260514a";
+} from "./messagesSockets.js?v=20260601b";
+import { createHistoryController } from "./messagesHistory.js?v=20260602b";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260514a";
+} from "./messagesChatFlow.js?v=20260601a";
 import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420i";
 
 const DEBUG_CHAT = false;
 let keysReady = false;
 let pendingMessages = [];
-let myPrivateKeyCache = null;
-let myPublicKeyCache = null;
+let myIdentityPrivateKeyCache = null;
+let myIdentityKeyCache = null;
+let myIdentitySigningKeyCache = null;
+let myDeviceBundlesCache = [];
+let myCurrentDeviceId = null;
 let myUsername = null;
 let currentChatId = null;
 let historySyncInProgress = false;
@@ -61,9 +69,13 @@ const decryptedAttachmentCache = new Map();
 const historyController = createHistoryController({
     getMyUsername: () => myUsername,
     getCurrentChatId: () => currentChatId,
-    getMyPrivateKey: () => myPrivateKeyCache,
-    getMyPublicKey: () => myPublicKeyCache,
-    getOtherPublicKey: () => window.otherPublicKey,
+    getMyPrivateKey: () => myIdentityPrivateKeyCache,
+    getMyIdentityKey: () => myIdentityKeyCache,
+    getOtherIdentityKey: () => window.otherIdentityKey,
+    getOtherDeviceBundleById: (deviceId) => {
+        const bundles = Array.isArray(window.otherDeviceBundles) ? window.otherDeviceBundles : [];
+        return bundles.find((bundle) => bundle?.device_id === deviceId) || null;
+    },
     resolveAttachment: async (attachment, isOwnMessage) => {
         if (!attachment?.meta?.encrypted) {
             return attachment;
@@ -76,7 +88,7 @@ const historyController = createHistoryController({
 
         const decryptedAttachment = await decryptAttachmentData({
             attachment,
-            myPrivateKeyUint8: myPrivateKeyCache,
+            myPrivateKeyUint8: myIdentityPrivateKeyCache,
             isOwnMessage
         });
         decryptedAttachmentCache.set(cacheKey, decryptedAttachment);
@@ -92,10 +104,12 @@ function buildReadinessSnapshot() {
         currentChatId,
         chatSocketOpened,
         hasChatSocket: Boolean(window.chatSocket),
-        hasMyPrivateKey: Boolean(myPrivateKeyCache),
-        hasMyPublicKey: Boolean(myPublicKeyCache),
-        hasOtherPublicKey: Boolean(window.otherPublicKey),
-        hasOtherIdentityKey: Boolean(window.otherIdentityKey),
+        hasMyPrivateKey: Boolean(myIdentityPrivateKeyCache),
+        hasMyPublicKey: Boolean(myIdentityKeyCache),
+        hasMyIdentityKey: Boolean(myIdentityKeyCache),
+        hasMyIdentitySigningKey: Boolean(myIdentitySigningKeyCache),
+        hasOtherPublicKey: Boolean(window.otherIdentityKey),
+        hasOtherIdentitySigningKey: Boolean(window.otherIdentitySigningKey),
         hasOtherPrekeyBundle: Boolean(window.otherPrekeyBundle),
         keysReady,
         historySyncInProgress,
@@ -147,17 +161,22 @@ window.sendMessage = async function () {
         getInput: () => document.getElementById("messageInput"),
         getAttachmentInput: () => document.getElementById("messageAttachmentInput"),
         getChatSocket: () => window.chatSocket,
-        getMyPublicKey: () => myPublicKeyCache,
-        getMyPrivateKey: () => myPrivateKeyCache,
-        getOtherPublicKey: () => window.otherPublicKey,
+        getMyIdentityKey: () => myIdentityKeyCache,
+        getMyPrivateKey: () => myIdentityPrivateKeyCache,
+        getCurrentDeviceId: () => myCurrentDeviceId,
+        getOwnDeviceBundles: () => myDeviceBundlesCache,
+        getOtherIdentityKey: () => window.otherIdentityKey,
         getOtherPrekeyBundle: () => window.otherPrekeyBundle,
+        getOtherDeviceBundles: () => window.otherDeviceBundles || [],
         refreshChatKeys,
         isKeysReady: () => keysReady,
         logChatState,
         getRatchetState,
         deleteRatchetState,
         encryptMessage,
+        encryptMessageForDevices,
         encryptAttachmentData,
+        saveAttachmentHistory,
         authFetch,
         onAttachmentSent: () => updateAttachmentComposerState(null),
         setAttachmentFeedback
@@ -187,7 +206,10 @@ window.addEventListener("load", async function () {
     const meData = await meRes.json();
     if (meData.status === "ok") {
         myUsername = meData.username || "";
-        logChatState("account binding skipped on messages page");
+        const bindingChanged = await ensureLocalAccountBinding(meData);
+        myCurrentDeviceId = meData.current_device_id || readCurrentDeviceId();
+        await restoreCloudBackupIfNeeded(meData);
+        logChatState("account binding ensured on messages page", { bindingChanged });
     }
 
     bindChatHeaderControls();
@@ -220,16 +242,19 @@ window.addEventListener("load", async function () {
     cryptoBootstrapPromise = (async () => {
         logChatState("crypto bootstrap started");
         await initKeysIfNeeded();
-        myPrivateKeyCache = await getPrivateKeyUint8();
-        myPublicKeyCache = await getPublicKey();
+        myIdentityPrivateKeyCache = await getIdentityPrivateKeyUint8();
+        myIdentityKeyCache = await getIdentityKey();
+        myIdentitySigningKeyCache = await getIdentitySigningKey();
+        myCurrentDeviceId = readCurrentDeviceId();
+        await loadOwnDeviceBundles();
         updateChatReadiness();
         logChatState("crypto bootstrap finished");
 
-        if (currentChatId && !window.otherPublicKey) {
+        if (currentChatId && !window.otherIdentityKey) {
             scheduleChatKeyRefresh(currentChatId);
         }
 
-        if (window.otherPublicKey || window.otherIdentityKey) {
+        if (window.otherIdentityKey || window.otherIdentitySigningKey) {
             await refreshSafetyNumber();
         }
     })().catch((error) => {
@@ -261,17 +286,31 @@ async function initializeChat(chatId) {
     });
 }
 
-async function applyChatKeys(publicKey, identityKey, prekeyBundle = null, username = "", avatarData = null) {
+async function loadOwnDeviceBundles() {
+    const response = await authFetch("/users/me/device-bundles");
+    const payload = await response.json();
+    if (response.ok && payload?.status === "ok" && Array.isArray(payload.devices)) {
+        myDeviceBundlesCache = payload.devices;
+        return true;
+    }
+
+    myDeviceBundlesCache = [];
+    return false;
+}
+
+async function applyChatKeys(identityKey, identitySigningKey, prekeyBundle = null, username = "", avatarData = null, deviceBundles = []) {
     await applyChatKeysFlow({
-        publicKey,
         identityKey,
+        identitySigningKey,
         prekeyBundle,
+        deviceBundles,
         username,
         avatarData,
-        setOtherKeys: ({ publicKey: nextPublicKey, identityKey: nextIdentityKey, prekeyBundle: nextPrekeyBundle }) => {
-            window.otherPublicKey = nextPublicKey;
+        setOtherKeys: ({ identityKey: nextIdentityKey, identitySigningKey: nextIdentitySigningKey, prekeyBundle: nextPrekeyBundle, deviceBundles: nextDeviceBundles }) => {
             window.otherIdentityKey = nextIdentityKey;
+            window.otherIdentitySigningKey = nextIdentitySigningKey;
             window.otherPrekeyBundle = nextPrekeyBundle;
+            window.otherDeviceBundles = nextDeviceBundles;
         },
         logChatState,
         setChatUserName: (nextUsername) => {
@@ -307,7 +346,7 @@ function clearChatKeyRefreshTimer() {
 function scheduleChatKeyRefresh(chatId, attempt = 0) {
     clearChatKeyRefreshTimer();
 
-    if (!chatId || window.otherPublicKey || attempt >= 20) {
+    if (!chatId || window.otherIdentityKey || attempt >= 20) {
         if (attempt >= 20) {
             logChatState("chat key refresh stopped after max attempts", { attempt }, "warn");
         }
@@ -315,7 +354,7 @@ function scheduleChatKeyRefresh(chatId, attempt = 0) {
     }
 
     chatKeysRetryTimer = window.setTimeout(async () => {
-        if (!myPrivateKeyCache || !myPublicKeyCache) {
+        if (!myIdentityPrivateKeyCache || !myIdentityKeyCache) {
             logChatState("chat key refresh postponed: local keys are not ready", { attempt: attempt + 1 }, "warn");
             scheduleChatKeyRefresh(chatId, attempt + 1);
             return;
@@ -336,9 +375,8 @@ function scheduleChatKeyRefresh(chatId, attempt = 0) {
 
 async function refreshSafetyNumber() {
     await refreshSafetyNumberFlow({
-        otherIdentityKey: window.otherIdentityKey,
-        otherPublicKey: window.otherPublicKey,
-        myIdentityKey: myPublicKeyCache,
+        otherIdentitySigningKey: window.otherIdentitySigningKey,
+        myIdentitySigningKey: myIdentitySigningKeyCache,
         deriveSafetyNumber,
         setCurrentFingerprint: (fp) => {
             currentFingerprint = fp;
@@ -425,8 +463,8 @@ async function openChatSocket(chatId) {
 function updateChatReadiness() {
     const cryptoReady = Boolean(
         chatSocketOpened &&
-        myPrivateKeyCache &&
-        myPublicKeyCache &&
+        myIdentityPrivateKeyCache &&
+        myIdentityKeyCache &&
         !historySyncInProgress
     );
     keysReady = cryptoReady;
@@ -476,11 +514,19 @@ function getCurrentChatId() {
     return currentChatId;
 }
 
-async function updateVerificationUi(fp, verificationKey, myIdentityKey) {
+function readCurrentDeviceId() {
+    try {
+        return window.sessionStorage.getItem("e2ee_device_id") || null;
+    } catch {
+        return null;
+    }
+}
+
+async function updateVerificationUi(fp, verificationKey, myIdentitySigningKey) {
     return updateVerificationUiFlow({
         fingerprint: fp,
         verificationKey,
-        myIdentityKey,
+        myIdentitySigningKey,
         getVerificationStatus,
         saveVerificationStatus,
         resetLocalCryptoState

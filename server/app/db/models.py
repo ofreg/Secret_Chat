@@ -22,12 +22,30 @@ class User(Base):
         default=lambda: uuid.uuid4().hex,
     )
     avatar_filename: Mapped[str] = mapped_column(String, nullable=True)
-    public_key: Mapped[str] = mapped_column(Text, nullable=True)
-    identity_key: Mapped[str] = mapped_column(Text, nullable=True)
-    signing_key: Mapped[str] = mapped_column(Text, nullable=True)
+    identity_key: Mapped[str] = mapped_column("public_key", Text, nullable=True)
+    identity_signing_key: Mapped[str] = mapped_column("identity_key", Text, nullable=True)
     signed_prekey: Mapped[str] = mapped_column(Text, nullable=True)
     signed_prekey_signature: Mapped[str] = mapped_column(Text, nullable=True)
     signed_prekey_key_id: Mapped[int] = mapped_column(Integer, nullable=True)
+
+
+class Device(Base):
+    __tablename__ = "devices"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    device_id: Mapped[str] = mapped_column(String, unique=True, index=True)
+    device_name: Mapped[str] = mapped_column(String, nullable=False, default="Browser device")
+    identity_key: Mapped[str] = mapped_column(Text, nullable=True)
+    identity_signing_key: Mapped[str] = mapped_column(Text, nullable=True)
+    signed_prekey: Mapped[str] = mapped_column(Text, nullable=True)
+    signed_prekey_signature: Mapped[str] = mapped_column(Text, nullable=True)
+    signed_prekey_key_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship("User")
 
 
 class RefreshToken(Base):
@@ -40,6 +58,17 @@ class RefreshToken(Base):
 
     user_agent: Mapped[str] = mapped_column(String, nullable=True)
     ip_address: Mapped[str] = mapped_column(String, nullable=True)
+
+
+class EncryptedKeyBackup(Base):
+    __tablename__ = "encrypted_key_backups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    user: Mapped["User"] = relationship("User")
 
 
 class PasswordResetToken(Base):
@@ -78,6 +107,7 @@ class Message(Base):
 
     chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id"))
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    sender_device_id: Mapped[str] = mapped_column(String, nullable=True)
 
     content: Mapped[str] = mapped_column(Text)
     attachment_kind: Mapped[str] = mapped_column(String, nullable=True)
@@ -90,6 +120,22 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     delivered_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     read_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
+class MessageDevicePayload(Base):
+    __tablename__ = "message_device_payloads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    device_id: Mapped[str] = mapped_column(String, index=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_role: Mapped[str] = mapped_column(String, nullable=False, default="shared")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "device_id", "payload_role"),
+    )
 
 
 class OneTimePreKey(Base):
@@ -106,4 +152,19 @@ class OneTimePreKey(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "key_id"),
+    )
+
+
+class DeviceOneTimePreKey(Base):
+    __tablename__ = "device_one_time_prekeys"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[str] = mapped_column(String, index=True)
+    key_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("device_id", "key_id"),
     )

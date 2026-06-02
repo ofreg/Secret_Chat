@@ -1,6 +1,6 @@
 import io
 
-from tests.helpers import login_user, register_user, upload_public_key, upload_x3dh_keys
+from tests.helpers import login_user, register_user, upload_x3dh_keys
 
 
 def test_protected_message_routes_require_authentication(client):
@@ -27,13 +27,10 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert login_user(client, "user1@example.com").status_code == 303
     assert login_user(second_client, "user2@example.com").status_code == 303
 
-    assert upload_public_key(client, "public-key-user1").status_code == 200
-    assert upload_public_key(second_client, "public-key-user2").status_code == 200
     assert upload_x3dh_keys(
         second_client,
-        public_key="public-key-user2",
-        identity_key="identity-user2",
-        signing_key="signing-user2",
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
         signed_prekey="signed-prekey-user2",
         signed_prekey_signature="signed-prekey-signature-user2",
         signed_prekey_key_id=101,
@@ -56,14 +53,15 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["chat_id"] == 1
-    assert payload["public_key"] == "public-key-user2"
+    assert payload["identity_key"] == "public-key-user2"
+    assert payload["identity_signing_key"] == "identity-signing-user2"
     assert payload["username"] == "user2"
     assert payload["avatar_url"] is None
     assert payload["avatar_class"].startswith("avatar-gradient-")
     assert payload["avatar_initial"] == "U"
     assert payload["prekey_bundle"] == {
-        "identity_key": "identity-user2",
-        "signing_key": "signing-user2",
+        "identity_key": "public-key-user2",
+        "identity_signing_key": "identity-signing-user2",
         "signed_prekey": "signed-prekey-user2",
         "signed_prekey_signature": "signed-prekey-signature-user2",
         "signed_prekey_key_id": 101,
@@ -75,8 +73,8 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     payload = response.json()
     assert payload["chat_id"] == 1
     assert payload["prekey_bundle"] == {
-        "identity_key": "identity-user2",
-        "signing_key": "signing-user2",
+        "identity_key": "public-key-user2",
+        "identity_signing_key": "identity-signing-user2",
         "signed_prekey": "signed-prekey-user2",
         "signed_prekey_signature": "signed-prekey-signature-user2",
         "signed_prekey_key_id": 101,
@@ -87,14 +85,15 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["public_key"] == "public-key-user2"
+    assert payload["identity_key"] == "public-key-user2"
+    assert payload["identity_signing_key"] == "identity-signing-user2"
     assert payload["username"] == "user2"
     assert payload["avatar_url"] is None
     assert payload["avatar_class"].startswith("avatar-gradient-")
     assert payload["avatar_initial"] == "U"
     assert payload["prekey_bundle"] == {
-        "identity_key": "identity-user2",
-        "signing_key": "signing-user2",
+        "identity_key": "public-key-user2",
+        "identity_signing_key": "identity-signing-user2",
         "signed_prekey": "signed-prekey-user2",
         "signed_prekey_signature": "signed-prekey-signature-user2",
         "signed_prekey_key_id": 101,
@@ -107,8 +106,8 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
         "status": "ok",
         "username": "user2",
         "bundle": {
-            "identity_key": "identity-user2",
-            "signing_key": "signing-user2",
+            "identity_key": "public-key-user2",
+            "identity_signing_key": "identity-signing-user2",
             "signed_prekey": "signed-prekey-user2",
             "signed_prekey_signature": "signed-prekey-signature-user2",
             "signed_prekey_key_id": 101,
@@ -116,14 +115,23 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
         },
     }
 
+    response = client.get("/users/device-prekey-bundles", params={"username": "user2"})
+    assert response.status_code == 200
+    device_payload = response.json()
+    assert device_payload["status"] == "ok"
+    assert device_payload["username"] == "user2"
+    assert len(device_payload["devices"]) == 1
+    assert device_payload["devices"][0]["device_id"]
+    assert device_payload["devices"][0]["identity_key"] == "public-key-user2"
+
     response = client.get("/users/prekey-bundle", params={"username": "user2"})
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
         "username": "user2",
         "bundle": {
-            "identity_key": "identity-user2",
-            "signing_key": "signing-user2",
+            "identity_key": "public-key-user2",
+            "identity_signing_key": "identity-signing-user2",
             "signed_prekey": "signed-prekey-user2",
             "signed_prekey_signature": "signed-prekey-signature-user2",
             "signed_prekey_key_id": 101,
@@ -133,9 +141,8 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
 
     assert upload_x3dh_keys(
         second_client,
-        public_key="public-key-user2",
-        identity_key="identity-user2",
-        signing_key="signing-user2",
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
         signed_prekey="signed-prekey-user2-v2",
         signed_prekey_signature="signed-prekey-signature-user2-v2",
         signed_prekey_key_id=202,
@@ -148,8 +155,8 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
         "status": "ok",
         "username": "user2",
         "bundle": {
-            "identity_key": "identity-user2",
-            "signing_key": "signing-user2",
+            "identity_key": "public-key-user2",
+            "identity_signing_key": "identity-signing-user2",
             "signed_prekey": "signed-prekey-user2-v2",
             "signed_prekey_signature": "signed-prekey-signature-user2-v2",
             "signed_prekey_key_id": 202,
@@ -163,30 +170,33 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert "public-key-user2" in response.text
 
 
-def test_messages_key_endpoints_fallback_to_identity_key(client, second_client):
+def test_messages_key_endpoints_require_complete_x3dh_bundle(client, second_client):
     assert register_user(client, "user1@example.com").status_code == 303
     assert register_user(second_client, "user2@example.com").status_code == 303
 
     assert login_user(client, "user1@example.com").status_code == 303
     assert login_user(second_client, "user2@example.com").status_code == 303
 
-    assert upload_public_key(client, "public-key-user1").status_code == 200
-    assert upload_x3dh_keys(
-        second_client,
-        public_key="",
-        identity_key="identity-user2-only",
-        signing_key="signing-user2",
-        signed_prekey="signed-prekey-user2",
-        signed_prekey_signature="signed-prekey-signature-user2",
-        signed_prekey_key_id=101,
-        one_time_prekeys=[],
-    ).status_code == 200
+    invalid_upload_response = second_client.post(
+        "/users/x3dh-keys",
+        json={
+            "identity_key": "",
+            "identity_signing_key": "identity-signing-user2-only",
+            "signed_prekey": "signed-prekey-user2",
+            "signed_prekey_signature": "signed-prekey-signature-user2",
+            "signed_prekey_key_id": 101,
+            "one_time_prekeys": [],
+        },
+    )
+    assert invalid_upload_response.status_code == 422
 
     response = client.post("/messages/start", data={"username": "user2"})
     assert response.status_code == 200
     payload = response.json()
-    assert payload["public_key"] == "identity-user2-only"
-    assert payload["identity_key"] == "identity-user2-only"
+    assert payload == {
+        "status": "error",
+        "message": "Recipient X3DH keys are not initialized yet.",
+    }
 
 
 def test_message_attachment_upload(client, second_client):
@@ -195,6 +205,15 @@ def test_message_attachment_upload(client, second_client):
 
     assert login_user(client, "user1@example.com").status_code == 303
     assert login_user(second_client, "user2@example.com").status_code == 303
+    assert upload_x3dh_keys(
+        second_client,
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    ).status_code == 200
 
     response = client.post("/messages/start", data={"username": "user2"})
     assert response.status_code == 200
@@ -221,6 +240,15 @@ def test_encrypted_message_attachment_upload_hides_plain_metadata(client, second
 
     assert login_user(client, "user1@example.com").status_code == 303
     assert login_user(second_client, "user2@example.com").status_code == 303
+    assert upload_x3dh_keys(
+        second_client,
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    ).status_code == 200
 
     response = client.post("/messages/start", data={"username": "user2"})
     assert response.status_code == 200

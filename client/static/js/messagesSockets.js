@@ -10,7 +10,9 @@ export function createChatSocket({
     onHistoryComplete,
     onMessage
 }) {
-    const chatSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/${chatId}`);
+    const chatSocket = new WebSocket(
+        `${getWebSocketProtocol()}://${window.location.host}/ws/${chatId}${buildDeviceQuery()}`
+    );
 
     chatSocket.onopen = function () {
         if (debug) {
@@ -46,7 +48,9 @@ export function createUserSocket({
     onNewMessage,
     onMessageStatus
 }) {
-    const userSocket = new WebSocket(`${getWebSocketProtocol()}://${window.location.host}/ws/user`);
+    const userSocket = new WebSocket(
+        `${getWebSocketProtocol()}://${window.location.host}/ws/user${buildDeviceQuery()}`
+    );
 
     userSocket.onmessage = async function (event) {
         const data = JSON.parse(event.data);
@@ -73,6 +77,15 @@ export function createUserSocket({
     };
 
     return userSocket;
+}
+
+function buildDeviceQuery() {
+    try {
+        const deviceId = window.sessionStorage.getItem("e2ee_device_id") || "";
+        return deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+    } catch {
+        return "";
+    }
 }
  
 export async function reloadChatList(authFetch) {

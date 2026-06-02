@@ -21,8 +21,8 @@ export async function encryptRatchetMessage({
     chatId,
     plaintext,
     myPrivateKeyUint8,
-    myPublicKeyBase64,
-    otherPublicKeyBase64,
+    myIdentityKeyBase64,
+    otherIdentityKeyBase64,
     recipientPrekeyBundle,
     senderCopyFactory,
     senderStateFactory
@@ -30,13 +30,13 @@ export async function encryptRatchetMessage({
     let state = await getOrCreateState(
         chatId,
         myPrivateKeyUint8,
-        myPublicKeyBase64,
-        otherPublicKeyBase64,
+        myIdentityKeyBase64,
+        otherIdentityKeyBase64,
         recipientPrekeyBundle
     );
 
     if (!state.CKs) {
-        state = await initializeSendingChain(state, otherPublicKeyBase64);
+        state = await initializeSendingChain(state, otherIdentityKeyBase64);
     }
 
     const chainStep = await kdfChain(decodeBase64(state.CKs));
@@ -87,8 +87,8 @@ export async function decryptRatchetMessage({
     chatId,
     payload,
     myPrivateKeyUint8,
-    myPublicKeyBase64,
-    otherPublicKeyBase64,
+    myIdentityKeyBase64,
+    otherIdentityKeyBase64,
     isOwnMessage,
     allowStateReset = true,
     restoreSenderState = true,
@@ -108,8 +108,8 @@ export async function decryptRatchetMessage({
             const currentState = await getOrCreateState(
                 chatId,
                 myPrivateKeyUint8,
-                myPublicKeyBase64,
-                otherPublicKeyBase64
+                myIdentityKeyBase64,
+                otherIdentityKeyBase64
             );
 
             await saveRatchetState(
@@ -131,8 +131,8 @@ export async function decryptRatchetMessage({
             chatId,
             ratchetPayload,
             myPrivateKeyUint8,
-            myPublicKeyBase64,
-            otherPublicKeyBase64,
+            myIdentityKeyBase64,
+            otherIdentityKeyBase64,
             x3dhPayload: payload.x3dh || null
         });
     } catch (error) {
@@ -146,8 +146,8 @@ export async function decryptRatchetMessage({
             chatId,
             ratchetPayload,
             myPrivateKeyUint8,
-            myPublicKeyBase64,
-            otherPublicKeyBase64,
+            myIdentityKeyBase64,
+            otherIdentityKeyBase64,
             x3dhPayload: payload.x3dh || null
         });
     }
@@ -157,15 +157,15 @@ async function decryptWithState({
     chatId,
     ratchetPayload,
     myPrivateKeyUint8,
-    myPublicKeyBase64,
-    otherPublicKeyBase64,
+    myIdentityKeyBase64,
+    otherIdentityKeyBase64,
     x3dhPayload = null
 }) {
     let state = await getOrCreateState(
         chatId,
         myPrivateKeyUint8,
-        myPublicKeyBase64,
-        otherPublicKeyBase64,
+        myIdentityKeyBase64,
+        otherIdentityKeyBase64,
         null,
         x3dhPayload
     );
@@ -211,8 +211,8 @@ async function decryptWithState({
 async function getOrCreateState(
     chatId,
     myPrivateKeyUint8,
-    myPublicKeyBase64,
-    otherPublicKeyBase64,
+    myIdentityKeyBase64,
+    otherIdentityKeyBase64,
     recipientPrekeyBundle = null,
     x3dhPayload = null
 ) {
@@ -228,8 +228,8 @@ async function getOrCreateState(
 
     const bootstrapState = await createInitialState({
         myPrivateKeyUint8,
-        myPublicKeyBase64,
-        otherPublicKeyBase64,
+        myIdentityKeyBase64,
+        otherIdentityKeyBase64,
         recipientPrekeyBundle,
         x3dhPayload
     });
@@ -243,8 +243,8 @@ async function getOrCreateState(
     return state;
 }
 
-async function initializeSendingChain(state, otherPublicKeyBase64) {
-    const remoteKey = state.initialRemotePreKey || state.DHr || otherPublicKeyBase64;
+async function initializeSendingChain(state, otherIdentityKeyBase64) {
+    const remoteKey = state.initialRemotePreKey || state.DHr || otherIdentityKeyBase64;
 
     if (state.useIdentityForSending) {
         state.DHs = serializeKeyPair(nacl.box.keyPair());
@@ -266,18 +266,21 @@ async function initializeSendingChain(state, otherPublicKeyBase64) {
 
 async function createInitialState({
     myPrivateKeyUint8,
-    myPublicKeyBase64,
-    otherPublicKeyBase64,
+    myIdentityKeyBase64,
+    otherIdentityKeyBase64,
     recipientPrekeyBundle,
     x3dhPayload
 }) {
     if (recipientPrekeyBundle?.signed_prekey) {
         if (
-            recipientPrekeyBundle.signing_key &&
+            recipientPrekeyBundle.identity_key &&
+            recipientPrekeyBundle.identity_signing_key &&
             recipientPrekeyBundle.signed_prekey_signature &&
             !verifySignedPreKey({
-                signingKeyBase64: recipientPrekeyBundle.signing_key,
+                identitySigningKeyBase64: recipientPrekeyBundle.identity_signing_key,
+                identityKeyBase64: recipientPrekeyBundle.identity_key,
                 signedPreKeyBase64: recipientPrekeyBundle.signed_prekey,
+                signedPreKeyKeyId: recipientPrekeyBundle.signed_prekey_key_id,
                 signatureBase64: recipientPrekeyBundle.signed_prekey_signature
             })
         ) {
@@ -288,7 +291,7 @@ async function createInitialState({
         const x3dhSecret = await deriveInitiatorX3dhSecret({
             myIdentityPrivateKeyBase64: encodeBase64(myPrivateKeyUint8),
             myEphemeralPrivateKeyBase64: encodeBase64(initiatorEphemeral.secretKey),
-            recipientIdentityKeyBase64: recipientPrekeyBundle.identity_key || otherPublicKeyBase64,
+            recipientIdentityKeyBase64: recipientPrekeyBundle.identity_key || otherIdentityKeyBase64,
             recipientSignedPreKeyBase64: recipientPrekeyBundle.signed_prekey,
             recipientOneTimePreKeyBase64: recipientPrekeyBundle.one_time_prekey?.public_key || null
         });
@@ -296,11 +299,11 @@ async function createInitialState({
         return {
             RK: x3dhSecret,
             DHs: {
-                publicKey: myPublicKeyBase64,
+                publicKey: myIdentityKeyBase64,
                 privateKey: encodeBase64(myPrivateKeyUint8)
             },
             DHr: null,
-            remoteIdentityKey: recipientPrekeyBundle.identity_key || otherPublicKeyBase64,
+            remoteIdentityKey: recipientPrekeyBundle.identity_signing_key || null,
             CKs: null,
             CKr: null,
             Ns: 0,
@@ -311,7 +314,7 @@ async function createInitialState({
             initialPrivateKey: null,
             initialRemotePreKey: recipientPrekeyBundle.signed_prekey,
             pendingX3dhHandshake: {
-                initiator_identity_key: myPublicKeyBase64,
+                initiator_identity_key: myIdentityKeyBase64,
                 initiator_ephemeral_key: encodeBase64(initiatorEphemeral.publicKey),
                 signed_prekey_key_id: recipientPrekeyBundle.signed_prekey_key_id,
                 one_time_prekey_key_id: recipientPrekeyBundle.one_time_prekey?.key_id || null
@@ -340,11 +343,11 @@ async function createInitialState({
         return {
             RK: x3dhSecret,
             DHs: {
-                publicKey: myPublicKeyBase64,
+                publicKey: myIdentityKeyBase64,
                 privateKey: encodeBase64(myPrivateKeyUint8)
             },
             DHr: null,
-            remoteIdentityKey: x3dhPayload.initiator_identity_key,
+            remoteIdentityKey: null,
             CKs: null,
             CKr: null,
             Ns: 0,
@@ -360,18 +363,18 @@ async function createInitialState({
 
     const sharedIdentitySecret = nacl.scalarMult(
         myPrivateKeyUint8,
-        decodeBase64(otherPublicKeyBase64)
+        decodeBase64(otherIdentityKeyBase64)
     );
     const rootKey = await sha256(sharedIdentitySecret);
 
     return {
         RK: encodeBase64(rootKey),
         DHs: {
-            publicKey: myPublicKeyBase64,
+            publicKey: myIdentityKeyBase64,
             privateKey: encodeBase64(myPrivateKeyUint8)
         },
         DHr: null,
-        remoteIdentityKey: otherPublicKeyBase64,
+        remoteIdentityKey: null,
         CKs: null,
         CKr: null,
         Ns: 0,

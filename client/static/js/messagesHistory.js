@@ -6,14 +6,19 @@ import {
     saveCachedMessageText,
     saveLastSeenMessageId
 } from "./crypto.js?v=20260420i";
-import { decryptMessage, selectPayloadForCurrentUser } from "./chatCrypto.js?v=20260514a";
+import {
+    cacheAttachmentHistoryFromMessageMeta,
+    decryptMessage,
+    selectPayloadForCurrentUser
+} from "./chatCrypto.js?v=20260602a";
 
 export function createHistoryController({
     getMyUsername,
     getCurrentChatId,
     getMyPrivateKey,
-    getMyPublicKey,
-    getOtherPublicKey,
+    getMyIdentityKey,
+    getOtherIdentityKey,
+    getOtherDeviceBundleById,
     resolveAttachment,
     renderChatMessage,
     getSenderLabel,
@@ -55,6 +60,20 @@ export function createHistoryController({
         }
     }
 
+    function buildIncomingSessionId(chatId, data) {
+        const senderDeviceId = data?.sender_device_id || "unknown-device";
+        return `${chatId}:from:${senderDeviceId}`;
+    }
+
+    function resolveOtherIdentityKeyForMessage(data, isOwnMessage) {
+        if (isOwnMessage) {
+            return getOtherIdentityKey();
+        }
+
+        const bundle = getOtherDeviceBundleById?.(data?.sender_device_id || "");
+        return bundle?.identity_key || getOtherIdentityKey();
+    }
+
     async function rebuildRatchetStateFromTranscript(chatId, upToMessageId) {
         await deleteRatchetState(chatId);
         let replayStartIndex = 0;
@@ -74,8 +93,8 @@ export function createHistoryController({
                     chatId,
                     payload: candidatePayload,
                     myPrivateKeyUint8: getMyPrivateKey(),
-                    myPublicKeyBase64: getMyPublicKey(),
-                    otherPublicKeyBase64: getOtherPublicKey(),
+                    myIdentityKeyBase64: getMyIdentityKey(),
+                    otherIdentityKeyBase64: getOtherIdentityKey(),
                     isOwnMessage: true,
                     allowStateReset: false,
                     restoreSenderState: true,
@@ -97,11 +116,11 @@ export function createHistoryController({
 
             try {
                 await decryptMessage({
-                    chatId,
+                    chatId: buildIncomingSessionId(chatId, item),
                     payload,
                     myPrivateKeyUint8: getMyPrivateKey(),
-                    myPublicKeyBase64: getMyPublicKey(),
-                    otherPublicKeyBase64: getOtherPublicKey(),
+                    myIdentityKeyBase64: getMyIdentityKey(),
+                    otherIdentityKeyBase64: resolveOtherIdentityKeyForMessage(item, isOwnMessage),
                     isOwnMessage,
                     allowStateReset: !isOwnMessage,
                     restoreSenderState: true,
@@ -123,7 +142,7 @@ export function createHistoryController({
         restoreSenderRootKey
     }) {
         if (!isOwnMessage && payload?.version === 3 && payload?.x3dh) {
-            const existingRatchetState = await getRatchetState(chatId);
+            const existingRatchetState = await getRatchetState(buildIncomingSessionId(chatId, data));
             if (existingRatchetState?.DHr === null) {
                 logChatState("resetting outbound-only ratchet state before incoming X3DH decrypt", {
                     messageId: data.message_id,
@@ -131,17 +150,18 @@ export function createHistoryController({
                     hasRemoteDh: Boolean(existingRatchetState?.DHr),
                     hasIncomingX3dh: true
                 }, "warn");
-                await deleteRatchetState(chatId);
+                await deleteRatchetState(buildIncomingSessionId(chatId, data));
             }
         }
 
+        const effectiveChatId = isOwnMessage ? chatId : buildIncomingSessionId(chatId, data);
         try {
             return await decryptMessage({
-                chatId,
+                chatId: effectiveChatId,
                 payload,
                 myPrivateKeyUint8: getMyPrivateKey(),
-                myPublicKeyBase64: getMyPublicKey(),
-                otherPublicKeyBase64: getOtherPublicKey(),
+                myIdentityKeyBase64: getMyIdentityKey(),
+                otherIdentityKeyBase64: resolveOtherIdentityKeyForMessage(data, isOwnMessage),
                 isOwnMessage,
                 allowStateReset,
                 restoreSenderState,
@@ -156,11 +176,11 @@ export function createHistoryController({
             await rebuildRatchetStateFromTranscript(chatId, data.message_id);
 
             return decryptMessage({
-                chatId,
+                chatId: effectiveChatId,
                 payload,
                 myPrivateKeyUint8: getMyPrivateKey(),
-                myPublicKeyBase64: getMyPublicKey(),
-                otherPublicKeyBase64: getOtherPublicKey(),
+                myIdentityKeyBase64: getMyIdentityKey(),
+                otherIdentityKeyBase64: resolveOtherIdentityKeyForMessage(data, isOwnMessage),
                 isOwnMessage,
                 allowStateReset: !isOwnMessage,
                 restoreSenderState,
@@ -192,6 +212,18 @@ export function createHistoryController({
             let resolvedAttachment = null;
             let resolvedText = cachedText;
             if (data.attachment) {
+                if (data.attachment.meta?.encrypted) {
+                    try {
+                        await cacheAttachmentHistoryFromMessageMeta({
+                            attachment: data.attachment,
+                            myPrivateKeyUint8: getMyPrivateKey(),
+                            isOwnMessage
+                        });
+                    } catch (attachmentCacheError) {
+                        console.warn("Historical attachment history cache error:", attachmentCacheError);
+                    }
+                }
+
                 try {
                     resolvedAttachment = await resolveAttachment(data.attachment, isOwnMessage);
                 } catch (attachmentError) {
@@ -230,6 +262,18 @@ export function createHistoryController({
             }
 
             if (attachment) {
+                if (attachment.meta?.encrypted) {
+                    try {
+                        await cacheAttachmentHistoryFromMessageMeta({
+                            attachment,
+                            myPrivateKeyUint8: getMyPrivateKey(),
+                            isOwnMessage
+                        });
+                    } catch (attachmentCacheError) {
+                        console.warn("Attachment history cache error:", attachmentCacheError);
+                    }
+                }
+
                 try {
                     attachment = await resolveAttachment(attachment, isOwnMessage);
                 } catch (attachmentError) {

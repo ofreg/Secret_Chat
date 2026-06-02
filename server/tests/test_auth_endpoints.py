@@ -1,4 +1,4 @@
-from tests.helpers import login_user, register_user, upload_public_key
+from tests.helpers import login_user, register_user, upload_x3dh_keys
 
 
 def test_auth_flow_and_profile_endpoints(client):
@@ -25,9 +25,18 @@ def test_auth_flow_and_profile_endpoints(client):
     assert response.status_code == 200
     assert response.json()["username"] == "user1"
 
-    response = upload_public_key(client, "public-key-user1")
+    response = upload_x3dh_keys(
+        client,
+        identity_key="public-key-user1",
+        identity_signing_key="identity-signing-user1",
+        signed_prekey="signed-prekey-user1",
+        signed_prekey_signature="signed-prekey-signature-user1",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    )
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
+    assert response.json()["device_id"]
 
     response = client.get("/profile")
     assert response.status_code == 200
@@ -98,6 +107,97 @@ def test_logout_revokes_session_for_protected_routes(client):
         follow_redirects=False,
     )
     assert response.status_code == 401
+
+
+def test_encrypted_key_backup_roundtrip(client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+
+    backup_payload = {
+        "version": 1,
+        "salt": "salt-base64",
+        "iv": "iv-base64",
+        "ciphertext": "ciphertext-base64",
+        "backup_version": 1,
+        "updated_at_client": "2026-06-01T10:00:00Z",
+    }
+
+    response = client.put("/users/key-backup", json=backup_payload)
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    response = client.get("/users/key-backup")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "backup": backup_payload,
+    }
+
+
+def test_device_registry_lists_registered_browsers(client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+
+    response = client.post(
+        "/users/x3dh-keys",
+        json={
+            "device_id": "browser-a",
+            "device_name": "Chrome browser",
+            "identity_key": "public-key-user1",
+            "identity_signing_key": "identity-signing-user1",
+            "signed_prekey": "signed-prekey-user1",
+            "signed_prekey_signature": "signed-prekey-signature-user1",
+            "signed_prekey_key_id": 101,
+            "one_time_prekeys": [],
+        },
+    )
+    assert response.status_code == 200
+
+    response = client.get("/users/devices")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "devices": [
+            {
+                "device_id": "browser-a",
+                "device_name": "Chrome browser",
+                "created_at": response.json()["devices"][0]["created_at"],
+                "last_seen_at": response.json()["devices"][0]["last_seen_at"],
+                "has_complete_bundle": True,
+            }
+        ],
+    }
+
+
+def test_device_registry_revokes_browser(client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+
+    response = client.post(
+        "/users/x3dh-keys",
+        json={
+            "device_id": "browser-a",
+            "device_name": "Chrome browser",
+            "identity_key": "public-key-user1",
+            "identity_signing_key": "identity-signing-user1",
+            "signed_prekey": "signed-prekey-user1",
+            "signed_prekey_signature": "signed-prekey-signature-user1",
+            "signed_prekey_key_id": 101,
+            "one_time_prekeys": [],
+        },
+    )
+    assert response.status_code == 200
+
+    response = client.delete("/users/devices/browser-a")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    response = client.get("/users/devices")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "devices": [],
+    }
 
 
 def test_password_reset_flow(client, monkeypatch):
