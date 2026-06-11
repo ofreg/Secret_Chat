@@ -104,6 +104,10 @@ ensure_schema_sql = [
     ("users", "signed_prekey", "ALTER TABLE users ADD COLUMN signed_prekey TEXT"),
     ("users", "signed_prekey_signature", "ALTER TABLE users ADD COLUMN signed_prekey_signature TEXT"),
     ("users", "signed_prekey_key_id", "ALTER TABLE users ADD COLUMN signed_prekey_key_id INTEGER"),
+    ("chats", "user1_hidden", "ALTER TABLE chats ADD COLUMN user1_hidden BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("chats", "user2_hidden", "ALTER TABLE chats ADD COLUMN user2_hidden BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("chats", "user1_cleared_at", "ALTER TABLE chats ADD COLUMN user1_cleared_at TIMESTAMP"),
+    ("chats", "user2_cleared_at", "ALTER TABLE chats ADD COLUMN user2_cleared_at TIMESTAMP"),
     ("messages", "delivered_at", "ALTER TABLE messages ADD COLUMN delivered_at TIMESTAMP"),
     ("messages", "read_at", "ALTER TABLE messages ADD COLUMN read_at TIMESTAMP"),
     ("messages", "attachment_kind", "ALTER TABLE messages ADD COLUMN attachment_kind TEXT"),
@@ -113,6 +117,8 @@ ensure_schema_sql = [
     ("messages", "attachment_size", "ALTER TABLE messages ADD COLUMN attachment_size INTEGER"),
     ("messages", "attachment_meta", "ALTER TABLE messages ADD COLUMN attachment_meta TEXT"),
     ("messages", "sender_device_id", "ALTER TABLE messages ADD COLUMN sender_device_id TEXT"),
+    ("messages", "deleted_for_all_at", "ALTER TABLE messages ADD COLUMN deleted_for_all_at TIMESTAMP"),
+    ("messages", "deleted_for_all_by_user_id", "ALTER TABLE messages ADD COLUMN deleted_for_all_by_user_id INTEGER"),
 ]
 
 # Let SQLAlchemy create all missing tables with dialect-correct types first.

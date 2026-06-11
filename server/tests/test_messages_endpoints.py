@@ -1,5 +1,7 @@
 import io
 
+from app.db.models import Chat, DeletedMessage, Message
+from app.utils.time import utc_now
 from tests.helpers import login_user, register_user, upload_x3dh_keys
 
 
@@ -279,3 +281,107 @@ def test_security_headers_present_on_messages_page(client):
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert "camera=()" in response.headers["Permissions-Policy"]
+
+
+def test_message_delete_self_and_all_endpoints(client, second_client, db_session):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    chat = Chat(user1_id=1, user2_id=2)
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    own_message = Message(chat_id=chat.id, sender_id=1, content="cipher-own")
+    peer_message = Message(chat_id=chat.id, sender_id=2, content="cipher-peer")
+    db_session.add_all([own_message, peer_message])
+    db_session.commit()
+    db_session.refresh(own_message)
+    db_session.refresh(peer_message)
+
+    response = client.post(f"/messages/{peer_message.id}/delete-self")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    deleted_row = (
+        db_session.query(DeletedMessage)
+        .filter(DeletedMessage.user_id == 1, DeletedMessage.message_id == peer_message.id)
+        .first()
+    )
+    assert deleted_row is not None
+
+    response = client.post(f"/messages/{own_message.id}/delete-all")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    db_session.refresh(own_message)
+    assert own_message.deleted_for_all_at is not None
+    assert own_message.deleted_for_all_by_user_id == 1
+    assert own_message.attachment_url is None
+
+
+def test_chat_delete_and_restart_reuses_existing_chat(client, second_client, db_session):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    assert upload_x3dh_keys(
+        client,
+        identity_key="public-key-user1",
+        identity_signing_key="identity-signing-user1",
+        signed_prekey="signed-prekey-user1",
+        signed_prekey_signature="signed-prekey-signature-user1",
+        signed_prekey_key_id=201,
+        one_time_prekeys=[],
+    ).status_code == 200
+    assert upload_x3dh_keys(
+        second_client,
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    ).status_code == 200
+
+    start_response = client.post("/messages/start", data={"username": "user2"})
+    assert start_response.status_code == 200
+    chat_id = start_response.json()["chat_id"]
+
+    chat = db_session.query(Chat).filter(Chat.id == chat_id).first()
+    assert chat is not None
+    db_session.add(Message(chat_id=chat_id, sender_id=1, content="cipher-history", created_at=utc_now()))
+    db_session.commit()
+
+    response = client.post(f"/chats/{chat_id}/delete-self")
+    assert response.status_code == 200
+    db_session.refresh(chat)
+    assert chat.user1_hidden is True
+    assert chat.user1_cleared_at is not None
+
+    messages_page = client.get("/messages")
+    assert messages_page.status_code == 200
+    assert f"/messages?chat_id={chat_id}" not in messages_page.text
+
+    restart_response = client.post("/messages/start", data={"username": "user2"})
+    assert restart_response.status_code == 200
+    assert restart_response.json()["chat_id"] == chat_id
+
+    db_session.refresh(chat)
+    assert chat.user1_hidden is False
+    assert chat.user1_cleared_at is not None
+
+    response = client.post(f"/chats/{chat_id}/delete-all")
+    assert response.status_code == 200
+    db_session.refresh(chat)
+    assert chat.user1_hidden is True
+    assert chat.user2_hidden is True
+    assert chat.user1_cleared_at is not None
+    assert chat.user2_cleared_at is not None
+
+    second_start = second_client.post("/messages/start", data={"username": "user1"})
+    assert second_start.status_code == 200
+    assert second_start.json()["chat_id"] == chat_id

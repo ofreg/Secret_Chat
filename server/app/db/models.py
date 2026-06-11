@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -94,6 +94,10 @@ class Chat(Base):
     user2: Mapped["User"] = relationship("User", foreign_keys=[user2_id])
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    user1_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    user2_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    user1_cleared_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    user2_cleared_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("user1_id", "user2_id"),
@@ -120,6 +124,8 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     delivered_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     read_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    deleted_for_all_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    deleted_for_all_by_user_id: Mapped[int] = mapped_column(Integer, nullable=True)
 
 
 class MessageDevicePayload(Base):
@@ -135,6 +141,19 @@ class MessageDevicePayload(Base):
 
     __table_args__ = (
         UniqueConstraint("message_id", "device_id", "payload_role"),
+    )
+
+
+class DeletedMessage(Base):
+    __tablename__ = "deleted_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "message_id"),
     )
 
 

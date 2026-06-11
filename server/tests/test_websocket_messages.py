@@ -75,6 +75,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client):
         "historical": False,
         "delivery_status": "read",
         "attachment": None,
+        "deleted_for_all": False,
     }
     assert receiver_message == sender_message
     assert first_notification == {"type": "new_message", "chat_id": chat_id}
@@ -104,6 +105,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client):
         "historical": True,
         "delivery_status": "read",
         "attachment": None,
+        "deleted_for_all": False,
     }
     assert history_complete == {"type": "history_complete"}
 
@@ -143,6 +145,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
                 "historical": False,
                 "delivery_status": "sent",
                 "attachment": None,
+                "deleted_for_all": False,
             }
 
     db_session = SessionLocal()
@@ -175,6 +178,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
             "historical": True,
             "delivery_status": "read",
             "attachment": None,
+            "deleted_for_all": False,
         },
         {
             "type": "message",
@@ -185,6 +189,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
             "historical": True,
             "delivery_status": "read",
             "attachment": None,
+            "deleted_for_all": False,
         },
         {
             "type": "message",
@@ -195,6 +200,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
             "historical": True,
             "delivery_status": "read",
             "attachment": None,
+            "deleted_for_all": False,
         },
     ]
     assert history_complete == {"type": "history_complete"}
@@ -247,6 +253,7 @@ def test_websocket_media_message_persists_attachment(client, second_client):
             "mime_type": "audio/mpeg",
             "size": 12345,
         },
+        "deleted_for_all": False,
     }
 
     db_session = SessionLocal()

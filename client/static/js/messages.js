@@ -25,7 +25,9 @@ import {
     bindAttachmentAlertControls,
     bindChatHeaderControls,
     getSenderLabel,
+    markMessageDeletedForAll,
     markChatAsUpdated,
+    removeRenderedMessage,
     renderMessage,
     resetRenderedMessages,
     setAttachmentFeedback,
@@ -33,13 +35,13 @@ import {
     updateAttachmentComposerState,
     updateMessageStatus,
     updateChatHeaderAvatar
-} from "./messagesUi.js?v=20260430c";
+} from "./messagesUi.js?v=20260602c";
 import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260601b";
-import { createHistoryController } from "./messagesHistory.js?v=20260602b";
+} from "./messagesSockets.js?v=20260602c";
+import { createHistoryController } from "./messagesHistory.js?v=20260602c";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
@@ -239,6 +241,8 @@ window.addEventListener("load", async function () {
         });
     }
 
+    bindDeletionControls();
+
     cryptoBootstrapPromise = (async () => {
         logChatState("crypto bootstrap started");
         await initKeysIfNeeded();
@@ -431,9 +435,17 @@ async function openChatSocket(chatId) {
             deferredLiveMessages = [];
             queuedLiveMessages.forEach(historyController.queueMessageProcessing);
         },
+        onChatDeleted: async (data) => {
+            await handleChatDeletedEvent(data);
+        },
         onMessage: (data) => {
             if (data.type === "message_status") {
                 updateMessageStatus(data.message_id, data.delivery_status);
+                return;
+            }
+
+            if (data.type === "message_deleted") {
+                handleMessageDeletedEvent(data);
                 return;
             }
 
@@ -497,8 +509,141 @@ function connectUserSocket() {
         },
         onMessageStatus: async (data) => {
             updateMessageStatus(data.message_id, data.delivery_status);
+        },
+        onChatDeleted: async (data) => {
+            await handleChatDeletedEvent(data);
         }
     });
+}
+
+function bindDeletionControls() {
+    document.addEventListener("click", async (event) => {
+        const deleteSelfButton = event.target.closest("[data-delete-message-self]");
+        if (deleteSelfButton) {
+            const messageId = Number(deleteSelfButton.getAttribute("data-delete-message-self") || "0");
+            if (messageId > 0) {
+                await deleteMessageForSelf(messageId);
+            }
+            return;
+        }
+
+        const deleteAllButton = event.target.closest("[data-delete-message-all]");
+        if (deleteAllButton) {
+            const messageId = Number(deleteAllButton.getAttribute("data-delete-message-all") || "0");
+            if (messageId > 0) {
+                await deleteMessageForAll(messageId);
+            }
+            return;
+        }
+    });
+
+    const deleteChatForMeBtn = document.getElementById("deleteChatForMeBtn");
+    if (deleteChatForMeBtn) {
+        deleteChatForMeBtn.onclick = async () => {
+            await deleteCurrentChat(false);
+        };
+    }
+
+    const deleteChatForAllBtn = document.getElementById("deleteChatForAllBtn");
+    if (deleteChatForAllBtn) {
+        deleteChatForAllBtn.onclick = async () => {
+            await deleteCurrentChat(true);
+        };
+    }
+}
+
+async function deleteMessageForSelf(messageId) {
+    const confirmed = window.confirm("Delete this message only for your account on all your devices?");
+    if (!confirmed) {
+        return;
+    }
+
+    const response = await authFetch(`/messages/${messageId}/delete-self`, {
+        method: "POST"
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.status !== "ok") {
+        alert(payload?.detail || payload?.message || "Failed to delete the message for you.");
+        return;
+    }
+
+    removeRenderedMessage(messageId);
+}
+
+async function deleteMessageForAll(messageId) {
+    const confirmed = window.confirm("Delete this message for everyone on all devices?");
+    if (!confirmed) {
+        return;
+    }
+
+    const response = await authFetch(`/messages/${messageId}/delete-all`, {
+        method: "POST"
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.status !== "ok") {
+        alert(payload?.detail || payload?.message || "Failed to delete the message for everyone.");
+        return;
+    }
+
+    markMessageDeletedForAll(messageId);
+}
+
+async function deleteCurrentChat(deleteForAll) {
+    if (!currentChatId) {
+        return;
+    }
+
+    const confirmed = window.confirm(
+        deleteForAll
+            ? "Delete this chat for everyone on all devices?"
+            : "Delete this chat only for your account on all your devices?"
+    );
+    if (!confirmed) {
+        return;
+    }
+
+    const endpoint = deleteForAll
+        ? `/chats/${currentChatId}/delete-all`
+        : `/chats/${currentChatId}/delete-self`;
+    const response = await authFetch(endpoint, {
+        method: "POST"
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.status !== "ok") {
+        alert(payload?.detail || payload?.message || "Failed to delete the chat.");
+        return;
+    }
+
+    await handleChatDeletedEvent({
+        type: "chat_deleted",
+        chat_id: Number(currentChatId),
+        delete_for_all: deleteForAll
+    });
+}
+
+function handleMessageDeletedEvent(data) {
+    if (!data?.message_id) {
+        return;
+    }
+
+    if (data.delete_for_all) {
+        markMessageDeletedForAll(data.message_id);
+        return;
+    }
+
+    removeRenderedMessage(data.message_id);
+}
+
+async function handleChatDeletedEvent(data) {
+    if (!data?.chat_id) {
+        return;
+    }
+
+    await loadChats();
+
+    if (String(data.chat_id) === String(currentChatId)) {
+        window.location.href = "/messages";
+    }
 }
 
 async function loadChats() {

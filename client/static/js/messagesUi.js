@@ -193,7 +193,8 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         messageId = null,
         deliveryStatus = null,
         isOwnMessage = false,
-        attachment = null
+        attachment = null,
+        deletedForAll = false
     } = options;
 
     if (messageId && renderedMessages.has(messageId)) {
@@ -224,6 +225,30 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         div.appendChild(body);
     }
 
+    if (messageId && !deletedForAll) {
+        const actions = document.createElement("span");
+        actions.className = "message-actions";
+
+        const deleteSelfButton = document.createElement("button");
+        deleteSelfButton.type = "button";
+        deleteSelfButton.className = "message-action-btn";
+        deleteSelfButton.dataset.deleteMessageSelf = String(messageId);
+        deleteSelfButton.textContent = "Delete for me";
+        actions.appendChild(deleteSelfButton);
+
+        if (isOwnMessage) {
+            const deleteAllButton = document.createElement("button");
+            deleteAllButton.type = "button";
+            deleteAllButton.className = "message-action-btn danger";
+            deleteAllButton.dataset.deleteMessageAll = String(messageId);
+            deleteAllButton.textContent = "Delete for all";
+            actions.appendChild(deleteAllButton);
+        }
+
+        div.appendChild(document.createTextNode(" "));
+        div.appendChild(actions);
+    }
+
     if (isOwnMessage && messageId) {
         const effectiveStatus = resolveStatus(
             deliveryStatus,
@@ -247,6 +272,42 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         renderedMessages.set(messageId, div);
     }
     return div;
+}
+
+export function removeRenderedMessage(messageId) {
+    const row = renderedMessages.get(messageId) || document.querySelector(`[data-message-id="${messageId}"]`);
+    if (!row) {
+        return;
+    }
+
+    row.remove();
+    renderedMessages.delete(messageId);
+    pendingMessageStatuses.delete(messageId);
+}
+
+export function markMessageDeletedForAll(messageId) {
+    const row = renderedMessages.get(messageId) || document.querySelector(`[data-message-id="${messageId}"]`);
+    if (!row) {
+        return;
+    }
+
+    const attachment = row.querySelector(".message-attachment");
+    if (attachment) {
+        attachment.remove();
+    }
+
+    const body = row.querySelector(".chat-message-text");
+    if (body) {
+        body.textContent = " [Message deleted]";
+        body.classList.remove("has-attachment");
+    } else {
+        const fallbackBody = document.createElement("span");
+        fallbackBody.className = "chat-message-text";
+        fallbackBody.textContent = " [Message deleted]";
+        row.appendChild(fallbackBody);
+    }
+
+    row.querySelectorAll(".message-actions").forEach((node) => node.remove());
 }
 
 export function updateMessageStatus(messageId, status) {

@@ -2,7 +2,7 @@ import json
 import os
 import logging
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.db.models import Chat, Device, DeviceOneTimePreKey, Message, MessageDevicePayload, OneTimePreKey, User
+from app.db.models import Chat, DeletedMessage, Device, DeviceOneTimePreKey, Message, MessageDevicePayload, OneTimePreKey, User
 from app.db.session import AsyncSessionLocal, SessionLocal
 from app.dependencies.auth import get_current_user
 from app.routers.auth import ensure_account_instance_id
@@ -69,6 +69,41 @@ def has_complete_device_bundle(device: Device) -> bool:
     )
 
 
+def get_chat_clear_cutoff(chat: Chat, user_id: int) -> datetime | None:
+    if user_id == chat.user1_id:
+        return chat.user1_cleared_at
+    if user_id == chat.user2_id:
+        return chat.user2_cleared_at
+    return None
+
+
+def is_chat_hidden_for_user(chat: Chat, user_id: int) -> bool:
+    if user_id == chat.user1_id:
+        return bool(chat.user1_hidden)
+    if user_id == chat.user2_id:
+        return bool(chat.user2_hidden)
+    return True
+
+
+def set_chat_hidden_for_user(chat: Chat, user_id: int, hidden: bool):
+    if user_id == chat.user1_id:
+        chat.user1_hidden = hidden
+    elif user_id == chat.user2_id:
+        chat.user2_hidden = hidden
+
+
+def set_chat_cleared_for_user(chat: Chat, user_id: int, cleared_at: datetime | None):
+    if user_id == chat.user1_id:
+        chat.user1_cleared_at = cleared_at
+    elif user_id == chat.user2_id:
+        chat.user2_cleared_at = cleared_at
+
+
+def is_message_cleared_for_user(message: Message, chat: Chat, user_id: int) -> bool:
+    cutoff = get_chat_clear_cutoff(chat, user_id)
+    return bool(cutoff and message.created_at and message.created_at <= cutoff)
+
+
 def get_delivery_status(message: Message) -> str:
     if message.read_at:
         return "read"
@@ -78,6 +113,19 @@ def get_delivery_status(message: Message) -> str:
 
 
 def serialize_message(message: Message, sender_name: str, *, historical: bool) -> dict:
+    if message.deleted_for_all_at:
+        return {
+            "type": "message",
+            "message_id": message.id,
+            "sender": sender_name,
+            "sender_device_id": message.sender_device_id,
+            "content": "[Message deleted]",
+            "historical": historical,
+            "delivery_status": get_delivery_status(message),
+            "attachment": None,
+            "deleted_for_all": True,
+        }
+
     attachment_meta = None
     if message.attachment_meta:
         try:
@@ -106,11 +154,14 @@ def serialize_message(message: Message, sender_name: str, *, historical: bool) -
         "historical": historical,
         "delivery_status": get_delivery_status(message),
         "attachment": attachment_payload,
+        "deleted_for_all": False,
     }
 
 
 def serialize_message_for_content(message: Message, sender_name: str, *, historical: bool, content: str) -> dict:
     payload = serialize_message(message, sender_name, historical=historical)
+    if message.deleted_for_all_at:
+        return payload
     payload["content"] = content
     return payload
 
@@ -120,6 +171,22 @@ def build_message_status_event(message: Message) -> dict:
         "type": "message_status",
         "message_id": message.id,
         "delivery_status": get_delivery_status(message),
+    }
+
+
+def build_message_deleted_event(message_id: int, *, delete_for_all: bool) -> dict:
+    return {
+        "type": "message_deleted",
+        "message_id": message_id,
+        "delete_for_all": delete_for_all,
+    }
+
+
+def build_chat_deleted_event(chat_id: int, *, delete_for_all: bool) -> dict:
+    return {
+        "type": "chat_deleted",
+        "chat_id": chat_id,
+        "delete_for_all": delete_for_all,
     }
 
 
@@ -143,6 +210,14 @@ def get_chat_for_user_sync(chat_id: int, user_id: int) -> Chat | None:
         return chat
     finally:
         db.close()
+
+
+def chat_has_visible_messages_sync(db: Session, chat: Chat, user_id: int) -> bool:
+    query = db.query(Message.id).filter(Message.chat_id == chat.id)
+    cutoff = get_chat_clear_cutoff(chat, user_id)
+    if cutoff is not None:
+        query = query.filter(Message.created_at > cutoff)
+    return query.first() is not None
 
 
 async def notify_message_status(db: AsyncSession, messages: list[Message]):
@@ -275,6 +350,9 @@ def messages_page(request: Request, current_user: User = Depends(get_current_use
                     other_identity_signing_key = selected_chat_user.identity_signing_key
 
         for chat in chats:
+            if is_chat_hidden_for_user(chat, current_user.id) and not chat_has_visible_messages_sync(db, chat, current_user.id):
+                continue
+
             other_user_id = chat.user2_id if chat.user1_id == current_user.id else chat.user1_id
             other_user = db.query(User).filter(User.id == other_user_id).first()
             if not other_user:
@@ -383,6 +461,8 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
             await db.refresh(chat)
             audit_logger.info("chat_created chat_id=%s user1_id=%s user2_id=%s", chat.id, u1, u2)
         else:
+            set_chat_hidden_for_user(chat, current_user.id, False)
+            await db.commit()
             audit_logger.info(
                 "chat_reused chat_id=%s requester_id=%s other_user_id=%s",
                 chat.id,
@@ -405,6 +485,112 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
             "username": other_user.username,
             **build_avatar_props(other_user),
         }
+
+
+@router.post("/messages/{message_id}/delete-self")
+async def delete_message_for_self(message_id: int, current_user: User = Depends(get_current_user)):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Message).where(Message.id == message_id))
+        message = result.scalar_one_or_none()
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        result = await db.execute(select(Chat).where(Chat.id == message.chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat or current_user.id not in [chat.user1_id, chat.user2_id]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        result = await db.execute(
+            select(DeletedMessage).where(
+                DeletedMessage.user_id == current_user.id,
+                DeletedMessage.message_id == message_id,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if not existing:
+            db.add(DeletedMessage(user_id=current_user.id, message_id=message_id))
+            await db.commit()
+
+        event = build_message_deleted_event(message_id, delete_for_all=False)
+        await manager.notify_chat_user(chat.id, current_user.id, event)
+        audit_logger.info("message_deleted_for_self chat_id=%s message_id=%s user_id=%s", chat.id, message_id, current_user.id)
+        return {"status": "ok"}
+
+
+@router.post("/messages/{message_id}/delete-all")
+async def delete_message_for_all(message_id: int, current_user: User = Depends(get_current_user)):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Message).where(Message.id == message_id))
+        message = result.scalar_one_or_none()
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        result = await db.execute(select(Chat).where(Chat.id == message.chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat or current_user.id not in [chat.user1_id, chat.user2_id]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if message.sender_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Only the sender can delete the message for all")
+
+        message.deleted_for_all_at = utc_now()
+        message.deleted_for_all_by_user_id = current_user.id
+        message.attachment_kind = None
+        message.attachment_url = None
+        message.attachment_name = None
+        message.attachment_mime_type = None
+        message.attachment_size = None
+        message.attachment_meta = None
+        await db.commit()
+
+        event = build_message_deleted_event(message_id, delete_for_all=True)
+        await manager.notify_chat_user(chat.id, chat.user1_id, event)
+        await manager.notify_chat_user(chat.id, chat.user2_id, event)
+        audit_logger.info("message_deleted_for_all chat_id=%s message_id=%s user_id=%s", chat.id, message_id, current_user.id)
+        return {"status": "ok"}
+
+
+@router.post("/chats/{chat_id}/delete-self")
+async def delete_chat_for_self(chat_id: int, current_user: User = Depends(get_current_user)):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Chat).where(Chat.id == chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat or current_user.id not in [chat.user1_id, chat.user2_id]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        deleted_at = utc_now()
+        set_chat_hidden_for_user(chat, current_user.id, True)
+        set_chat_cleared_for_user(chat, current_user.id, deleted_at)
+        await db.commit()
+
+        event = build_chat_deleted_event(chat_id, delete_for_all=False)
+        await manager.notify_chat_user(chat_id, current_user.id, event)
+        await manager.notify_user(current_user.id, event)
+        audit_logger.info("chat_deleted_for_self chat_id=%s user_id=%s", chat_id, current_user.id)
+        return {"status": "ok"}
+
+
+@router.post("/chats/{chat_id}/delete-all")
+async def delete_chat_for_all(chat_id: int, current_user: User = Depends(get_current_user)):
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Chat).where(Chat.id == chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat or current_user.id not in [chat.user1_id, chat.user2_id]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        deleted_at = utc_now()
+        set_chat_hidden_for_user(chat, chat.user1_id, True)
+        set_chat_hidden_for_user(chat, chat.user2_id, True)
+        set_chat_cleared_for_user(chat, chat.user1_id, deleted_at)
+        set_chat_cleared_for_user(chat, chat.user2_id, deleted_at)
+        await db.commit()
+
+        event = build_chat_deleted_event(chat_id, delete_for_all=True)
+        await manager.notify_chat_user(chat_id, chat.user1_id, event)
+        await manager.notify_chat_user(chat_id, chat.user2_id, event)
+        await manager.notify_user(chat.user1_id, event)
+        await manager.notify_user(chat.user2_id, event)
+        audit_logger.info("chat_deleted_for_all chat_id=%s user_id=%s", chat_id, current_user.id)
+        return {"status": "ok"}
 
 
 @router.websocket("/ws/user")
@@ -478,8 +664,13 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         await notify_message_status(db, updated_messages)
 
         device_payload_map = await load_device_payload_map(chat_id, user_id, device_id, db)
+        deleted_message_ids = await get_deleted_message_ids(chat_id, user_id, db)
         result = await db.execute(select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at))
-        messages = result.scalars().all()
+        messages = [
+            message
+            for message in result.scalars().all()
+            if is_message_visible_to_user(message, chat, user_id, deleted_message_ids)
+        ]
         usernames: dict[int, str] = {}
         for msg in messages:
             if msg.sender_id not in usernames:
@@ -553,6 +744,8 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                     read_at=read_at,
                 )
                 db.add(msg)
+                set_chat_hidden_for_user(chat, user_id, False)
+                set_chat_hidden_for_user(chat, other_user_id, False)
                 await db.commit()
                 await db.refresh(msg)
                 audit_logger.info(
@@ -625,6 +818,8 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
                         )
 
                 await manager.notify_user(other_user_id, {"type": "new_message", "chat_id": chat_id})
+                await manager.notify_user(other_user_id, {"type": "new_chat", "chat_id": chat_id})
+                await manager.notify_user(user_id, {"type": "new_chat", "chat_id": chat_id})
                 await notify_message_status(db, [msg])
                 audit_logger.info(
                     "new_message_notified chat_id=%s recipient_user_id=%s message_id=%s",
@@ -641,6 +836,28 @@ async def get_username(user_id: int, db: AsyncSession):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     return user.username if user else "Unknown"
+
+
+async def get_deleted_message_ids(chat_id: int, user_id: int, db: AsyncSession) -> set[int]:
+    result = await db.execute(
+        select(DeletedMessage.message_id)
+        .join(Message, Message.id == DeletedMessage.message_id)
+        .where(DeletedMessage.user_id == user_id, Message.chat_id == chat_id)
+    )
+    return {message_id for message_id in result.scalars().all()}
+
+
+def is_message_visible_to_user(
+    message: Message,
+    chat: Chat,
+    user_id: int,
+    deleted_message_ids: set[int],
+) -> bool:
+    if message.id in deleted_message_ids:
+        return False
+    if is_message_cleared_for_user(message, chat, user_id):
+        return False
+    return True
 
 
 @router.get("/messages/get_keys")

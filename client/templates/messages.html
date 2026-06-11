@@ -242,6 +242,29 @@
     line-height: 1.5;
 }
 
+.message-actions {
+    display: inline-flex;
+    gap: 6px;
+    margin-left: 8px;
+    flex-wrap: wrap;
+}
+
+.message-action-btn {
+    border: 1px solid #d5deea;
+    background: #f8fbff;
+    color: #40698d;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.message-action-btn.danger {
+    color: #991b1b;
+    border-color: #f1c7c7;
+    background: #fff5f5;
+}
+
 .chat-message b {
     color: #1d4a73;
 }
@@ -709,7 +732,7 @@ window.otherIdentitySigningKey = "{{ other_identity_signing_key }}";
 {% endif %}
 
 <script type="module" src="/static/js/searchBootstrap.js?v=20260421a"></script>
-<script type="module" src="/static/js/messages.js?v=20260602b"></script>
+<script type="module" src="/static/js/messages.js?v=20260602c"></script>
 
 <div class="container">
     <div class="sidebar">
@@ -799,6 +822,8 @@ window.otherIdentitySigningKey = "{{ other_identity_signing_key }}";
                         <button class="safety-btn secondary" id="resetFingerprintBtn" type="button">Reset</button>
                         <button class="safety-btn secondary" id="copyFingerprintBtn" type="button">Copy</button>
                         <button class="safety-btn secondary" id="resetIndexedDbBtn" type="button">Reset local DB</button>
+                        <button class="safety-btn secondary" id="deleteChatForMeBtn" type="button">Delete chat for me</button>
+                        <button class="safety-btn secondary" id="deleteChatForAllBtn" type="button">Delete chat for all</button>
                     </div>
 
                     <div class="qr-block">

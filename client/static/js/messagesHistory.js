@@ -237,7 +237,8 @@ export function createHistoryController({
                 messageId,
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
-                attachment: resolvedAttachment
+                attachment: resolvedAttachment,
+                deletedForAll: Boolean(data.deleted_for_all)
             });
             renderedMessageIds.add(messageId);
             return;
@@ -295,7 +296,8 @@ export function createHistoryController({
                 messageId,
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
-                attachment
+                attachment,
+                deletedForAll: Boolean(data.deleted_for_all)
             });
         } catch (err) {
             console.warn("Decrypt error:", err);
@@ -311,7 +313,8 @@ export function createHistoryController({
                 messageId,
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
-                attachment: data.attachment || null
+                attachment: data.attachment || null,
+                deletedForAll: Boolean(data.deleted_for_all)
             });
         }
     }

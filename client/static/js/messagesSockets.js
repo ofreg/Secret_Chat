@@ -8,7 +8,8 @@ export function createChatSocket({
     onOpen,
     onStatus,
     onHistoryComplete,
-    onMessage
+    onMessage,
+    onChatDeleted
 }) {
     const chatSocket = new WebSocket(
         `${getWebSocketProtocol()}://${window.location.host}/ws/${chatId}${buildDeviceQuery()}`
@@ -34,7 +35,12 @@ export function createChatSocket({
             return;
         }
 
-        if (data.type === "message" || data.type === "message_status") {
+        if (data.type === "chat_deleted") {
+            onChatDeleted?.(data);
+            return;
+        }
+
+        if (data.type === "message" || data.type === "message_status" || data.type === "message_deleted") {
             onMessage?.(data);
         }
     };
@@ -46,7 +52,8 @@ export function createUserSocket({
     debug = false,
     onNewChat,
     onNewMessage,
-    onMessageStatus
+    onMessageStatus,
+    onChatDeleted
 }) {
     const userSocket = new WebSocket(
         `${getWebSocketProtocol()}://${window.location.host}/ws/user${buildDeviceQuery()}`
@@ -67,6 +74,11 @@ export function createUserSocket({
 
         if (data.type === "message_status") {
             await onMessageStatus?.(data);
+            return;
+        }
+
+        if (data.type === "chat_deleted") {
+            await onChatDeleted?.(data);
         }
     };
 
