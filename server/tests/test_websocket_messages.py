@@ -269,6 +269,44 @@ def test_websocket_media_message_persists_attachment(client, second_client):
         db_session.close()
 
 
+def test_websocket_delete_for_self_hides_message_on_reconnect(client, second_client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+    assert upload_default_x3dh_bundle(second_client).status_code == 200
+
+    create_chat_response = client.post("/messages/start", data={"username": "user2"})
+    assert create_chat_response.status_code == 200
+    chat_id = create_chat_response.json()["chat_id"]
+
+    with client.websocket_connect(f"/ws/{chat_id}") as sender_ws:
+        sender_ws.receive_json()
+        sender_ws.receive_json()
+        sender_ws.send_text("delete-me")
+        sent_message = receive_until_type(sender_ws, "message")
+
+    delete_response = client.post(f"/messages/{sent_message['message_id']}/delete-self")
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"status": "ok"}
+
+    with client.websocket_connect(f"/ws/{chat_id}") as sender_reconnect_ws:
+        sender_reconnect_ws.receive_json()
+        history_complete = sender_reconnect_ws.receive_json()
+
+    assert history_complete == {"type": "history_complete"}
+
+    with second_client.websocket_connect(f"/ws/{chat_id}") as receiver_ws:
+        receiver_ws.receive_json()
+        receiver_message = receive_until_type(receiver_ws, "message")
+        history_complete = receiver_ws.receive_json()
+
+    assert receiver_message["content"] == "delete-me"
+    assert receiver_message["historical"] is True
+    assert history_complete == {"type": "history_complete"}
+
+
 def test_websocket_device_specific_payload_delivery_and_history(client, second_client):
     assert register_user(client, "user1@example.com").status_code == 303
     assert register_user(second_client, "user2@example.com").status_code == 303

@@ -113,19 +113,6 @@ def get_delivery_status(message: Message) -> str:
 
 
 def serialize_message(message: Message, sender_name: str, *, historical: bool) -> dict:
-    if message.deleted_for_all_at:
-        return {
-            "type": "message",
-            "message_id": message.id,
-            "sender": sender_name,
-            "sender_device_id": message.sender_device_id,
-            "content": "[Message deleted]",
-            "historical": historical,
-            "delivery_status": get_delivery_status(message),
-            "attachment": None,
-            "deleted_for_all": True,
-        }
-
     attachment_meta = None
     if message.attachment_meta:
         try:
@@ -160,8 +147,6 @@ def serialize_message(message: Message, sender_name: str, *, historical: bool) -
 
 def serialize_message_for_content(message: Message, sender_name: str, *, historical: bool, content: str) -> dict:
     payload = serialize_message(message, sender_name, historical=historical)
-    if message.deleted_for_all_at:
-        return payload
     payload["content"] = content
     return payload
 
@@ -853,6 +838,8 @@ def is_message_visible_to_user(
     user_id: int,
     deleted_message_ids: set[int],
 ) -> bool:
+    if message.deleted_for_all_at:
+        return False
     if message.id in deleted_message_ids:
         return False
     if is_message_cleared_for_user(message, chat, user_id):

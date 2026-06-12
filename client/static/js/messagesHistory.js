@@ -1,16 +1,19 @@
 import {
+    clearMessageDeletedForSelf,
     deleteRatchetState,
     getCachedMessageText,
+    isMessageDeletedForSelf,
     getLastSeenMessageId,
+    removeCachedMessageText,
     getRatchetState,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260420i";
+} from "./crypto.js?v=20260612a";
 import {
     cacheAttachmentHistoryFromMessageMeta,
     decryptMessage,
     selectPayloadForCurrentUser
-} from "./chatCrypto.js?v=20260602a";
+} from "./chatCrypto.js?v=20260612a";
 
 export function createHistoryController({
     getMyUsername,
@@ -204,7 +207,25 @@ export function createHistoryController({
 
         rememberTranscriptMessage(data);
 
+        if (messageId && !data.deleted_for_all && await isMessageDeletedForSelf(chatId, messageId)) {
+            renderedMessageIds.add(messageId);
+            return;
+        }
+
+        if (messageId && data.deleted_for_all) {
+            await clearMessageDeletedForSelf(chatId, messageId);
+            await removeCachedMessageText(chatId, messageId);
+        }
+
         if (messageId && renderedMessageIds.has(messageId)) {
+            return;
+        }
+
+        if (data.deleted_for_all) {
+            if (messageId) {
+                renderedMessageIds.add(messageId);
+                await saveLastSeenMessageId(chatId, Math.max(lastSeenMessageId, messageId));
+            }
             return;
         }
 

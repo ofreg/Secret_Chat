@@ -223,6 +223,34 @@ export async function getCachedMessageText(chatId, messageId) {
     return record?.text || null;
 }
 
+export async function removeCachedMessageText(chatId, messageId) {
+    const db = await idbOpen();
+    await db.delete("messages", `msg:${chatId}:${messageId}`);
+    scheduleCloudBackupSync();
+}
+
+export async function markMessageDeletedForSelf(chatId, messageId) {
+    const db = await idbOpen();
+    await db.put("messages", {
+        deleted: true,
+        updatedAt: Date.now()
+    }, `deleted:${chatId}:${messageId}`);
+    await db.delete("messages", `msg:${chatId}:${messageId}`);
+    scheduleCloudBackupSync();
+}
+
+export async function isMessageDeletedForSelf(chatId, messageId) {
+    const db = await idbOpen();
+    const record = await db.get("messages", `deleted:${chatId}:${messageId}`);
+    return Boolean(record?.deleted);
+}
+
+export async function clearMessageDeletedForSelf(chatId, messageId) {
+    const db = await idbOpen();
+    await db.delete("messages", `deleted:${chatId}:${messageId}`);
+    scheduleCloudBackupSync();
+}
+
 export async function saveLastSeenMessageId(chatId, messageId) {
     const db = await idbOpen();
     await db.put("messages", { messageId, updatedAt: Date.now() }, `meta:lastSeen:${chatId}`);

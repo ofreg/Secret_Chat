@@ -1,10 +1,12 @@
 import {
+    clearMessageDeletedForSelf,
     ensureLocalAccountBinding,
     deleteRatchetState,
     deriveSafetyNumber,
     getIdentityKey,
     getIdentityPrivateKeyUint8,
     getIdentitySigningKey,
+    markMessageDeletedForSelf,
     saveAttachmentHistory,
     getRatchetState,
     getVerificationStatus,
@@ -12,7 +14,7 @@ import {
     restoreCloudBackupIfNeeded,
     resetLocalCryptoState,
     saveVerificationStatus
-} from "./crypto.js?v=20260602a";
+} from "./crypto.js?v=20260612a";
 import { authFetch, ensureSession } from "./authClient.js?v=20260601b";
 import {
     decryptAttachmentData,
@@ -25,7 +27,6 @@ import {
     bindAttachmentAlertControls,
     bindChatHeaderControls,
     getSenderLabel,
-    markMessageDeletedForAll,
     markChatAsUpdated,
     removeRenderedMessage,
     renderMessage,
@@ -40,8 +41,8 @@ import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260602c";
-import { createHistoryController } from "./messagesHistory.js?v=20260602c";
+} from "./messagesSockets.js?v=20260612a";
+import { createHistoryController } from "./messagesHistory.js?v=20260612a";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
@@ -567,6 +568,7 @@ async function deleteMessageForSelf(messageId) {
         return;
     }
 
+    await markMessageDeletedForSelf(currentChatId, messageId);
     removeRenderedMessage(messageId);
 }
 
@@ -585,7 +587,8 @@ async function deleteMessageForAll(messageId) {
         return;
     }
 
-    markMessageDeletedForAll(messageId);
+    await clearMessageDeletedForSelf(currentChatId, messageId);
+    removeRenderedMessage(messageId);
 }
 
 async function deleteCurrentChat(deleteForAll) {
@@ -627,10 +630,12 @@ function handleMessageDeletedEvent(data) {
     }
 
     if (data.delete_for_all) {
-        markMessageDeletedForAll(data.message_id);
+        void clearMessageDeletedForSelf(currentChatId, data.message_id);
+        removeRenderedMessage(data.message_id);
         return;
     }
 
+    void markMessageDeletedForSelf(currentChatId, data.message_id);
     removeRenderedMessage(data.message_id);
 }
 
