@@ -1,6 +1,6 @@
 import hashlib
 
-from app.db.models import User
+from app.db.models import Chat, User
 
 AVATAR_GRADIENT_CLASSES = [
     "avatar-gradient-1",
@@ -32,6 +32,24 @@ def build_avatar_props(user: User | None) -> dict:
         "avatar_url": avatar_url,
         "avatar_class": None if avatar_url else _gradient_class(seed),
         "avatar_initial": _build_initial(user),
+    }
+
+
+def build_chat_avatar_props(chat: Chat | None) -> dict:
+    if not chat:
+        return {
+            "avatar_url": None,
+            "avatar_class": _gradient_class("unknown-chat"),
+            "avatar_initial": "#",
+        }
+
+    seed = chat.title or f"chat-{chat.id}"
+    avatar_url = f"/static/uploads/avatars/{chat.avatar_filename}" if chat.avatar_filename else None
+    title = (chat.title or "Group").strip()
+    return {
+        "avatar_url": avatar_url,
+        "avatar_class": None if avatar_url else _gradient_class(seed),
+        "avatar_initial": title[:1].upper() if title else "#",
     }
 
 

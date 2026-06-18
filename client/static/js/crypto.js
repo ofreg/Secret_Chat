@@ -315,6 +315,15 @@ export async function getIdentitySigningKey() {
     return data?.publicKey || null;
 }
 
+export async function getIdentitySigningPrivateKeyUint8() {
+    const db = await idbOpen();
+    const data = await readIdentitySigningRecord(db);
+    if (!data?.privateKey) {
+        return null;
+    }
+    return naclUtil.decodeBase64(data.privateKey);
+}
+
 export async function getSignedPreKeyPublic() {
     const db = await idbOpen();
     const data = await db.get("keys", "signed_prekey");
@@ -324,6 +333,69 @@ export async function getSignedPreKeyPublic() {
 export async function getSignedPreKey() {
     const db = await idbOpen();
     return readSignedPreKeyRecord(db);
+}
+
+export async function getGroupSenderState(chatId, senderDeviceId, groupKeyEpoch = 1) {
+    if (!chatId || !senderDeviceId) {
+        return null;
+    }
+
+    const db = await idbOpen();
+    return readGroupSenderStateRecord(db, buildGroupSenderStateKey(chatId, senderDeviceId, groupKeyEpoch));
+}
+
+export async function saveGroupSenderState(chatId, senderDeviceId, state, groupKeyEpoch = 1) {
+    if (!chatId || !senderDeviceId || !state?.chainKey) {
+        return false;
+    }
+
+    const db = await idbOpen();
+    await db.put(
+        "keys",
+        await encryptGroupSenderStateRecord(
+            {
+                senderKeyId: Number(state.senderKeyId || state.sender_key_id || 0),
+                counter: Number(state.counter || 0),
+                chainKey: String(state.chainKey || state.chain_key || ""),
+                createdAt: state.createdAt || state.created_at || new Date().toISOString(),
+                updatedAt: state.updatedAt || state.updated_at || new Date().toISOString()
+            },
+            db
+        ),
+        buildGroupSenderStateKey(chatId, senderDeviceId, groupKeyEpoch)
+    );
+    return true;
+}
+
+export async function deleteGroupSenderState(chatId, senderDeviceId, groupKeyEpoch = 1) {
+    if (!chatId || !senderDeviceId) {
+        return false;
+    }
+
+    const db = await idbOpen();
+    await db.delete("keys", buildGroupSenderStateKey(chatId, senderDeviceId, groupKeyEpoch));
+    return true;
+}
+
+export async function clearGroupSenderStatesForChat(chatId) {
+    if (!chatId) {
+        return false;
+    }
+
+    const db = await idbOpen();
+    const tx = db.transaction("keys", "readwrite");
+    let cursor = await tx.store.openCursor();
+    const prefix = buildGroupSenderStatePrefix(chatId);
+
+    while (cursor) {
+        if (String(cursor.key).startsWith(prefix)) {
+            await cursor.delete();
+        }
+        cursor = await cursor.continue();
+    }
+
+    await tx.done;
+    return true;
 }
 
 export async function consumeLocalOneTimePreKey(keyId) {
@@ -953,6 +1025,14 @@ async function clearStore(db, storeName) {
     await tx.done;
 }
 
+function buildGroupSenderStatePrefix(chatId) {
+    return `group_sender_state:${String(chatId)}:`;
+}
+
+function buildGroupSenderStateKey(chatId, senderDeviceId, groupKeyEpoch = 1) {
+    return `${buildGroupSenderStatePrefix(chatId)}${Number(groupKeyEpoch || 1)}:${String(senderDeviceId)}`;
+}
+
 async function readIdentityRecord(db) {
     const record = await db.get("keys", "identity_key");
     if (!record) {
@@ -980,6 +1060,29 @@ async function readIdentitySigningRecord(db) {
         privateKey
     };
     await db.put("keys", await encryptIdentitySigningRecord(normalized, db), "identity_signing_key");
+    return normalized;
+}
+
+async function readGroupSenderStateRecord(db, recordKey) {
+    const record = await db.get("keys", recordKey);
+    if (!record) {
+        return null;
+    }
+
+    const chainKey = await decryptPrivateValue(record.chainKeyEnc, record.chainKey, db);
+    if (!chainKey) {
+        return null;
+    }
+
+    const normalized = {
+        senderKeyId: Number(record.senderKeyId || 0),
+        counter: Number(record.counter || 0),
+        chainKey,
+        createdAt: record.createdAt || new Date().toISOString(),
+        updatedAt: record.updatedAt || new Date().toISOString()
+    };
+
+    await db.put("keys", await encryptGroupSenderStateRecord(normalized, db), recordKey);
     return normalized;
 }
 
@@ -1044,6 +1147,17 @@ async function encryptIdentitySigningRecord(identitySigning, db) {
     return {
         publicKey: identitySigning.publicKey,
         privateKeyEnc: await encryptPrivateValue(identitySigning.privateKey, db),
+        encryptedVersion: ENCRYPTED_VERSION
+    };
+}
+
+async function encryptGroupSenderStateRecord(state, db) {
+    return {
+        senderKeyId: Number(state.senderKeyId || 0),
+        counter: Number(state.counter || 0),
+        chainKeyEnc: await encryptPrivateValue(state.chainKey, db),
+        createdAt: state.createdAt || new Date().toISOString(),
+        updatedAt: state.updatedAt || new Date().toISOString(),
         encryptedVersion: ENCRYPTED_VERSION
     };
 }

@@ -3,6 +3,34 @@ import { authFetch } from "./authClient.js?v=20260420i";
 export function initUserSearch({ onChatStarted }) {
     const searchInput = document.getElementById("searchInput");
     const searchResults = document.getElementById("searchResults");
+    const groupMembers = document.getElementById("groupMembers");
+    const groupTitleInput = document.getElementById("groupTitleInput");
+    const createGroupBtn = document.getElementById("createGroupBtn");
+    const selectedUsers = new Map();
+
+    function renderSelectedUsers() {
+        if (!groupMembers) {
+            return;
+        }
+
+        groupMembers.innerHTML = "";
+        [...selectedUsers.values()].forEach((user) => {
+            const chip = document.createElement("div");
+            chip.className = "group-member-chip";
+            chip.appendChild(document.createTextNode(user.username));
+
+            const removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.textContent = "x";
+            removeBtn.addEventListener("click", () => {
+                selectedUsers.delete(user.username);
+                renderSelectedUsers();
+            });
+
+            chip.appendChild(removeBtn);
+            groupMembers.appendChild(chip);
+        });
+    }
 
     if (searchInput) {
         searchInput.addEventListener("input", async function () {
@@ -18,7 +46,7 @@ export function initUserSearch({ onChatStarted }) {
             searchResults.innerHTML = "";
             if (users.length === 0) {
                 const empty = document.createElement("p");
-                empty.textContent = "Нічого не знайдено";
+                empty.textContent = "Nothing found";
                 searchResults.appendChild(empty);
                 return;
             }
@@ -46,32 +74,86 @@ export function initUserSearch({ onChatStarted }) {
             alert(data.message);
         }
     };
-}
 
-function buildSearchResultItem(user) {
-    const container = document.createElement("div");
-    container.className = "search-result-item";
+    window.addUserToGroup = function (user) {
+        selectedUsers.set(user.username, user);
+        renderSelectedUsers();
+    };
 
-    const userInfo = document.createElement("div");
-    userInfo.className = "search-result-info";
-    userInfo.appendChild(createAvatarElement(user, "search-result-avatar"));
+    if (createGroupBtn) {
+        createGroupBtn.addEventListener("click", async () => {
+            const title = groupTitleInput?.value?.trim() || "";
+            if (!title) {
+                alert("Specify a group title.");
+                return;
+            }
+            if (selectedUsers.size < 2) {
+                alert("Add at least two users to create a group.");
+                return;
+            }
 
-    const name = document.createElement("div");
-    name.className = "search-result-name";
-    name.textContent = user.username;
-    userInfo.appendChild(name);
+            const formData = new FormData();
+            formData.append("title", title);
+            formData.append("usernames", JSON.stringify([...selectedUsers.keys()]));
 
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary-btn";
-    button.textContent = "Написати";
-    button.addEventListener("click", () => {
-        window.startChat(user.username);
-    });
+            const response = await authFetch("/messages/start-group", {
+                method: "POST",
+                body: formData
+            });
+            const data = await response.json();
 
-    container.appendChild(userInfo);
-    container.appendChild(button);
-    return container;
+            if (data.status === "ok") {
+                selectedUsers.clear();
+                renderSelectedUsers();
+                if (groupTitleInput) {
+                    groupTitleInput.value = "";
+                }
+                await onChatStarted(data);
+                return;
+            }
+
+            alert(data.message || "Could not create group.");
+        });
+    }
+
+    function buildSearchResultItem(user) {
+        const container = document.createElement("div");
+        container.className = "search-result-item";
+
+        const userInfo = document.createElement("div");
+        userInfo.className = "search-result-info";
+        userInfo.appendChild(createAvatarElement(user, "search-result-avatar"));
+
+        const name = document.createElement("div");
+        name.className = "search-result-name";
+        name.textContent = user.username;
+        userInfo.appendChild(name);
+
+        const writeButton = document.createElement("button");
+        writeButton.type = "button";
+        writeButton.className = "secondary-btn";
+        writeButton.textContent = "Write";
+        writeButton.addEventListener("click", () => {
+            window.startChat(user.username);
+        });
+
+        const addButton = document.createElement("button");
+        addButton.type = "button";
+        addButton.className = "secondary-btn";
+        addButton.textContent = "Add to group";
+        addButton.addEventListener("click", () => {
+            window.addUserToGroup(user);
+        });
+
+        const actions = document.createElement("div");
+        actions.className = "search-result-actions";
+        actions.appendChild(writeButton);
+        actions.appendChild(addButton);
+
+        container.appendChild(userInfo);
+        container.appendChild(actions);
+        return container;
+    }
 }
 
 function createAvatarElement(user, className) {

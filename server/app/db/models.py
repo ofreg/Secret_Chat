@@ -88,10 +88,16 @@ class Chat(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     user1_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    user2_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user2_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    avatar_filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    creator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    group_key_epoch: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     user1: Mapped["User"] = relationship("User", foreign_keys=[user1_id])
     user2: Mapped["User"] = relationship("User", foreign_keys=[user2_id])
+    creator: Mapped["User"] = relationship("User", foreign_keys=[creator_id])
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     user1_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -104,6 +110,21 @@ class Chat(Base):
     )
 
 
+class ChatParticipant(Base):
+    __tablename__ = "chat_participants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "user_id"),
+    )
+
+
 class Message(Base):
     __tablename__ = "messages"
 
@@ -112,6 +133,7 @@ class Message(Base):
     chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id"))
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     sender_device_id: Mapped[str] = mapped_column(String, nullable=True)
+    reply_to_message_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True)
 
     content: Mapped[str] = mapped_column(Text)
     attachment_kind: Mapped[str] = mapped_column(String, nullable=True)

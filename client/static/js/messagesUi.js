@@ -143,6 +143,27 @@ function buildAttachmentNode(attachment) {
     return null;
 }
 
+function buildReplyNode(replyTo) {
+    if (!replyTo?.messageId) {
+        return null;
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "message-reply";
+
+    const sender = document.createElement("div");
+    sender.className = "message-reply-sender";
+    sender.textContent = replyTo.senderLabel || "Reply";
+    wrapper.appendChild(sender);
+
+    const preview = document.createElement("div");
+    preview.className = "message-reply-preview";
+    preview.textContent = replyTo.previewText || "Original message";
+    wrapper.appendChild(preview);
+
+    return wrapper;
+}
+
 export function bindChatHeaderControls() {
     const toggle = document.getElementById("chatInfoToggle");
     const close = document.getElementById("chatInfoClose");
@@ -194,7 +215,8 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         deliveryStatus = null,
         isOwnMessage = false,
         attachment = null,
-        deletedForAll = false
+        deletedForAll = false,
+        replyTo = null
     } = options;
 
     if (messageId && renderedMessages.has(messageId)) {
@@ -206,10 +228,21 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
     if (messageId) {
         div.dataset.messageId = String(messageId);
     }
+    div.dataset.ownMessage = isOwnMessage ? "1" : "0";
+    div.dataset.senderLabel = senderLabel;
+    div.dataset.messagePreview = (text && String(text).trim())
+        ? String(text).trim().replace(/\s+/g, " ").slice(0, 140)
+        : (attachment ? "[Attachment]" : "");
 
     const sender = document.createElement("b");
     sender.textContent = `${senderLabel}:`;
     div.appendChild(sender);
+
+    const replyNode = buildReplyNode(replyTo);
+    if (replyNode) {
+        div.appendChild(document.createTextNode(" "));
+        div.appendChild(replyNode);
+    }
 
     const hasText = Boolean(text && String(text).trim());
     const attachmentNode = buildAttachmentNode(attachment);
@@ -223,30 +256,6 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         body.className = attachmentNode ? "chat-message-text has-attachment" : "chat-message-text";
         body.textContent = ` ${text}`;
         div.appendChild(body);
-    }
-
-    if (messageId && !deletedForAll) {
-        const actions = document.createElement("span");
-        actions.className = "message-actions";
-
-        const deleteSelfButton = document.createElement("button");
-        deleteSelfButton.type = "button";
-        deleteSelfButton.className = "message-action-btn";
-        deleteSelfButton.dataset.deleteMessageSelf = String(messageId);
-        deleteSelfButton.textContent = "Delete for me";
-        actions.appendChild(deleteSelfButton);
-
-        if (isOwnMessage) {
-            const deleteAllButton = document.createElement("button");
-            deleteAllButton.type = "button";
-            deleteAllButton.className = "message-action-btn danger";
-            deleteAllButton.dataset.deleteMessageAll = String(messageId);
-            deleteAllButton.textContent = "Delete for all";
-            actions.appendChild(deleteAllButton);
-        }
-
-        div.appendChild(document.createTextNode(" "));
-        div.appendChild(actions);
     }
 
     if (isOwnMessage && messageId) {
@@ -306,8 +315,6 @@ export function markMessageDeletedForAll(messageId) {
         fallbackBody.textContent = " [Message deleted]";
         row.appendChild(fallbackBody);
     }
-
-    row.querySelectorAll(".message-actions").forEach((node) => node.remove());
 }
 
 export function updateMessageStatus(messageId, status) {

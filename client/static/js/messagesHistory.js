@@ -13,14 +13,17 @@ import {
     cacheAttachmentHistoryFromMessageMeta,
     decryptMessage,
     selectPayloadForCurrentUser
-} from "./chatCrypto.js?v=20260612a";
+} from "./chatCrypto.js?v=20260612b";
 
 export function createHistoryController({
     getMyUsername,
     getCurrentChatId,
     getMyPrivateKey,
     getMyIdentityKey,
+    getMyIdentitySigningKey,
+    getOwnDeviceBundleById,
     getOtherIdentityKey,
+    getOtherIdentitySigningKey,
     getOtherDeviceBundleById,
     resolveAttachment,
     renderChatMessage,
@@ -55,6 +58,36 @@ export function createHistoryController({
         chatTranscript.sort((a, b) => (a.message_id || 0) - (b.message_id || 0));
     }
 
+    function saveResolvedTranscriptText(messageId, text) {
+        if (!messageId) {
+            return;
+        }
+
+        const item = chatTranscript.find((entry) => entry.message_id === messageId);
+        if (item) {
+            item._resolvedText = text;
+        }
+    }
+
+    async function buildReplyPayload(replyToMessageId) {
+        if (!replyToMessageId) {
+            return null;
+        }
+
+        const target = chatTranscript.find((item) => item.message_id === replyToMessageId);
+        const cachedTargetText = await getCachedMessageText(getCurrentChatId(), replyToMessageId);
+        const previewText = (target?._resolvedText || cachedTargetText || "").trim();
+        const fallbackPreview = target?.attachment ? "[Attachment]" : "Original message";
+
+        return {
+            messageId: replyToMessageId,
+            senderLabel: target ? getSenderLabel(target.sender) : "Reply",
+            previewText: previewText
+                ? previewText.replace(/\s+/g, " ").slice(0, 140)
+                : fallbackPreview
+        };
+    }
+
     function tryParsePayload(content) {
         try {
             return JSON.parse(content);
@@ -70,11 +103,21 @@ export function createHistoryController({
 
     function resolveOtherIdentityKeyForMessage(data, isOwnMessage) {
         if (isOwnMessage) {
-            return getOtherIdentityKey();
+            return getOtherIdentityKey() || getMyIdentityKey();
         }
 
         const bundle = getOtherDeviceBundleById?.(data?.sender_device_id || "");
         return bundle?.identity_key || getOtherIdentityKey();
+    }
+
+    function resolveOtherIdentitySigningKeyForMessage(data, isOwnMessage) {
+        if (isOwnMessage) {
+            const ownBundle = getOwnDeviceBundleById?.(data?.sender_device_id || "");
+            return ownBundle?.identity_signing_key || getMyIdentitySigningKey?.() || null;
+        }
+
+        const bundle = getOtherDeviceBundleById?.(data?.sender_device_id || "");
+        return bundle?.identity_signing_key || getOtherIdentitySigningKey?.() || null;
     }
 
     async function rebuildRatchetStateFromTranscript(chatId, upToMessageId) {
@@ -113,7 +156,7 @@ export function createHistoryController({
         for (const item of replayItems.slice(replayStartIndex)) {
             const payload = tryParsePayload(item.content);
             const isOwnMessage = item.sender === getMyUsername();
-            if (!payload || !selectPayloadForCurrentUser(payload, isOwnMessage)) {
+            if (!payload || payload.version === 5 || !selectPayloadForCurrentUser(payload, isOwnMessage)) {
                 continue;
             }
 
@@ -157,21 +200,25 @@ export function createHistoryController({
             }
         }
 
-        const effectiveChatId = isOwnMessage ? chatId : buildIncomingSessionId(chatId, data);
+        const effectiveChatId = payload?.version === 5 && payload?.mode === "group_sender_key"
+            ? chatId
+            : (isOwnMessage ? chatId : buildIncomingSessionId(chatId, data));
         try {
             return await decryptMessage({
                 chatId: effectiveChatId,
                 payload,
                 myPrivateKeyUint8: getMyPrivateKey(),
                 myIdentityKeyBase64: getMyIdentityKey(),
+                myIdentitySigningKeyBase64: getMyIdentitySigningKey?.() || null,
                 otherIdentityKeyBase64: resolveOtherIdentityKeyForMessage(data, isOwnMessage),
+                otherIdentitySigningKeyBase64: resolveOtherIdentitySigningKeyForMessage(data, isOwnMessage),
                 isOwnMessage,
                 allowStateReset,
                 restoreSenderState,
                 restoreSenderRootKey
             });
         } catch (error) {
-            if (isOwnMessage || !data.message_id) {
+            if (isOwnMessage || !data.message_id || (payload?.version === 5 && payload?.mode === "group_sender_key")) {
                 throw error;
             }
 
@@ -183,7 +230,9 @@ export function createHistoryController({
                 payload,
                 myPrivateKeyUint8: getMyPrivateKey(),
                 myIdentityKeyBase64: getMyIdentityKey(),
+                myIdentitySigningKeyBase64: getMyIdentitySigningKey?.() || null,
                 otherIdentityKeyBase64: resolveOtherIdentityKeyForMessage(data, isOwnMessage),
+                otherIdentitySigningKeyBase64: resolveOtherIdentitySigningKeyForMessage(data, isOwnMessage),
                 isOwnMessage,
                 allowStateReset: !isOwnMessage,
                 restoreSenderState,
@@ -238,7 +287,10 @@ export function createHistoryController({
                         await cacheAttachmentHistoryFromMessageMeta({
                             attachment: data.attachment,
                             myPrivateKeyUint8: getMyPrivateKey(),
-                            isOwnMessage
+                            isOwnMessage,
+                            myIdentitySigningKeyBase64: getMyIdentitySigningKey?.() || null,
+                            resolveOwnSigningKeyByDeviceId: (deviceId) => getOwnDeviceBundleById?.(deviceId)?.identity_signing_key || null,
+                            resolveSenderSigningKeyByDeviceId: (deviceId) => getOtherDeviceBundleById?.(deviceId)?.identity_signing_key || null
                         });
                     } catch (attachmentCacheError) {
                         console.warn("Historical attachment history cache error:", attachmentCacheError);
@@ -254,12 +306,14 @@ export function createHistoryController({
                         : "[Encrypted attachment unavailable]";
                 }
             }
+            saveResolvedTranscriptText(messageId, resolvedText);
             renderChatMessage(chat, getSenderLabel(data.sender), resolvedText, {
                 messageId,
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
                 attachment: resolvedAttachment,
-                deletedForAll: Boolean(data.deleted_for_all)
+                deletedForAll: Boolean(data.deleted_for_all),
+                replyTo: await buildReplyPayload(data.reply_to_message_id)
             });
             renderedMessageIds.add(messageId);
             return;
@@ -289,7 +343,10 @@ export function createHistoryController({
                         await cacheAttachmentHistoryFromMessageMeta({
                             attachment,
                             myPrivateKeyUint8: getMyPrivateKey(),
-                            isOwnMessage
+                            isOwnMessage,
+                            myIdentitySigningKeyBase64: getMyIdentitySigningKey?.() || null,
+                            resolveOwnSigningKeyByDeviceId: (deviceId) => getOwnDeviceBundleById?.(deviceId)?.identity_signing_key || null,
+                            resolveSenderSigningKeyByDeviceId: (deviceId) => getOtherDeviceBundleById?.(deviceId)?.identity_signing_key || null
                         });
                     } catch (attachmentCacheError) {
                         console.warn("Attachment history cache error:", attachmentCacheError);
@@ -311,6 +368,7 @@ export function createHistoryController({
                 await saveCachedMessageText(chatId, messageId, text);
                 await saveLastSeenMessageId(chatId, Math.max(lastSeenMessageId, messageId));
                 renderedMessageIds.add(messageId);
+                saveResolvedTranscriptText(messageId, text);
             }
 
             renderChatMessage(chat, getSenderLabel(data.sender), text, {
@@ -318,7 +376,8 @@ export function createHistoryController({
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
                 attachment,
-                deletedForAll: Boolean(data.deleted_for_all)
+                deletedForAll: Boolean(data.deleted_for_all),
+                replyTo: await buildReplyPayload(data.reply_to_message_id)
             });
         } catch (err) {
             console.warn("Decrypt error:", err);
@@ -328,6 +387,7 @@ export function createHistoryController({
 
             if (messageId) {
                 renderedMessageIds.add(messageId);
+                saveResolvedTranscriptText(messageId, fallbackText);
             }
 
             renderChatMessage(chat, getSenderLabel(data.sender), fallbackText, {
@@ -335,7 +395,8 @@ export function createHistoryController({
                 deliveryStatus: data.delivery_status,
                 isOwnMessage,
                 attachment: data.attachment || null,
-                deletedForAll: Boolean(data.deleted_for_all)
+                deletedForAll: Boolean(data.deleted_for_all),
+                replyTo: await buildReplyPayload(data.reply_to_message_id)
             });
         }
     }

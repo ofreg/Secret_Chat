@@ -142,6 +142,17 @@ class ConnectionManager:
             if not ok:
                 self.disconnect_chat(chat_id, websocket, user_id=user_id)
 
+    async def revoke_chat_user(self, chat_id: int, user_id: int, data: dict | None = None, *, code: int = 1008):
+        sockets = list(self.chat_user_connections.get(chat_id, {}).get(user_id, []))
+        for websocket in sockets:
+            if data is not None:
+                await self.safe_send(websocket, data)
+            try:
+                await websocket.close(code=code)
+            except Exception:
+                pass
+            self.disconnect_chat(chat_id, websocket, user_id=user_id)
+
     async def broadcast_user_status(self, user_id: int, is_online: bool):
         data = {
             "type": "status",

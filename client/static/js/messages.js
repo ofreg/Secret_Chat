@@ -1,4 +1,5 @@
 import {
+    clearGroupSenderStatesForChat,
     clearMessageDeletedForSelf,
     ensureLocalAccountBinding,
     deleteRatchetState,
@@ -14,14 +15,16 @@ import {
     restoreCloudBackupIfNeeded,
     resetLocalCryptoState,
     saveVerificationStatus
-} from "./crypto.js?v=20260612a";
+} from "./crypto.js?v=20260612b";
+// Bump module query strings when group E2EE runtime changes so browsers do not reuse stale modules.
 import { authFetch, ensureSession } from "./authClient.js?v=20260601b";
 import {
     decryptAttachmentData,
     encryptAttachmentData,
+    encryptGroupMessage,
     encryptMessage,
     encryptMessageForDevices
-} from "./chatCrypto.js?v=20260602b";
+} from "./chatCrypto.js?v=20260618a";
 import {
     bindMediaViewerControls,
     bindAttachmentAlertControls,
@@ -36,20 +39,20 @@ import {
     updateAttachmentComposerState,
     updateMessageStatus,
     updateChatHeaderAvatar
-} from "./messagesUi.js?v=20260602c";
+} from "./messagesUi.js?v=20260612c";
 import {
     createChatSocket,
     createUserSocket,
     reloadChatList
-} from "./messagesSockets.js?v=20260612a";
-import { createHistoryController } from "./messagesHistory.js?v=20260612a";
+} from "./messagesSockets.js?v=20260612b";
+import { createHistoryController } from "./messagesHistory.js?v=20260612d";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260601a";
+} from "./messagesChatFlow.js?v=20260612c";
 import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420i";
 
 const DEBUG_CHAT = false;
@@ -62,19 +65,30 @@ let myDeviceBundlesCache = [];
 let myCurrentDeviceId = null;
 let myUsername = null;
 let currentChatId = null;
+let currentChatIsGroup = false;
+let currentGroupCreatorId = null;
+let currentGroupKeyEpoch = 1;
 let historySyncInProgress = false;
 let deferredLiveMessages = [];
 let currentFingerprint = null;
 let cryptoBootstrapPromise = null;
 let chatSocketOpened = false;
 let chatKeysRetryTimer = null;
+let activeMessageContext = null;
+let activeReplyTarget = null;
 const decryptedAttachmentCache = new Map();
 const historyController = createHistoryController({
     getMyUsername: () => myUsername,
     getCurrentChatId: () => currentChatId,
     getMyPrivateKey: () => myIdentityPrivateKeyCache,
     getMyIdentityKey: () => myIdentityKeyCache,
+    getMyIdentitySigningKey: () => myIdentitySigningKeyCache,
+    getOwnDeviceBundleById: (deviceId) => {
+        const bundles = Array.isArray(myDeviceBundlesCache) ? myDeviceBundlesCache : [];
+        return bundles.find((bundle) => bundle?.device_id === deviceId) || null;
+    },
     getOtherIdentityKey: () => window.otherIdentityKey,
+    getOtherIdentitySigningKey: () => window.otherIdentitySigningKey,
     getOtherDeviceBundleById: (deviceId) => {
         const bundles = Array.isArray(window.otherDeviceBundles) ? window.otherDeviceBundles : [];
         return bundles.find((bundle) => bundle?.device_id === deviceId) || null;
@@ -92,7 +106,16 @@ const historyController = createHistoryController({
         const decryptedAttachment = await decryptAttachmentData({
             attachment,
             myPrivateKeyUint8: myIdentityPrivateKeyCache,
-            isOwnMessage
+            isOwnMessage,
+            myIdentitySigningKeyBase64: myIdentitySigningKeyCache,
+            resolveOwnSigningKeyByDeviceId: (deviceId) => {
+                const bundle = myDeviceBundlesCache.find((entry) => entry?.device_id === deviceId);
+                return bundle?.identity_signing_key || null;
+            },
+            resolveSenderSigningKeyByDeviceId: (deviceId) => {
+                const bundle = (window.otherDeviceBundles || []).find((entry) => entry?.device_id === deviceId);
+                return bundle?.identity_signing_key || null;
+            }
         });
         decryptedAttachmentCache.set(cacheKey, decryptedAttachment);
         return decryptedAttachment;
@@ -153,6 +176,254 @@ function clearDecryptedAttachmentCache() {
     decryptedAttachmentCache.clear();
 }
 
+function bindGroupControls() {
+    const saveBtn = document.getElementById("groupSaveMetaBtn");
+    const addBtn = document.getElementById("groupAddUserBtn");
+    if (saveBtn) {
+        saveBtn.addEventListener("click", () => {
+            void saveGroupMetadata();
+        });
+    }
+    if (addBtn) {
+        addBtn.addEventListener("click", () => {
+            void addUserToCurrentGroup();
+        });
+    }
+}
+
+function setGroupSettingsFeedback(message = "", tone = "") {
+    const feedback = document.getElementById("groupSettingsFeedback");
+    if (!feedback) {
+        return;
+    }
+    feedback.textContent = message;
+    feedback.className = "group-settings-feedback";
+    if (tone === "error") {
+        feedback.classList.add("is-error");
+    } else if (tone === "success") {
+        feedback.classList.add("is-success");
+    }
+}
+
+function renderGroupSettings(payload = null) {
+    const root = document.getElementById("groupSettings");
+    const titleInput = document.getElementById("groupTitleEditInput");
+    const membersList = document.getElementById("groupMembersList");
+    const saveBtn = document.getElementById("groupSaveMetaBtn");
+    const addInput = document.getElementById("groupAddUserInput");
+    const addBtn = document.getElementById("groupAddUserBtn");
+    if (!root || !titleInput || !membersList) {
+        return;
+    }
+
+    const isGroup = Boolean(payload?.is_group);
+    root.hidden = !isGroup;
+    if (!isGroup) {
+        membersList.innerHTML = "";
+        currentGroupCreatorId = null;
+        return;
+    }
+
+    currentGroupCreatorId = payload?.creator_id || null;
+    const isCreator = currentGroupCreatorId === meId();
+    titleInput.value = payload?.username || "";
+    titleInput.disabled = !isCreator;
+    if (saveBtn) {
+        saveBtn.hidden = !isCreator;
+    }
+    if (addInput) {
+        addInput.hidden = !isCreator;
+        addInput.disabled = !isCreator;
+    }
+    if (addBtn) {
+        addBtn.hidden = !isCreator;
+    }
+    membersList.innerHTML = "";
+
+    const members = Array.isArray(payload?.members) ? payload.members : [];
+    members.forEach((member) => {
+        const row = document.createElement("div");
+        row.className = "group-member-row";
+
+        const main = document.createElement("div");
+        main.className = "group-member-main";
+
+        const avatar = document.createElement(member.avatar_url ? "img" : "div");
+        if (member.avatar_url) {
+            avatar.src = member.avatar_url;
+            avatar.alt = member.username;
+            avatar.className = "search-result-avatar user-avatar-image";
+        } else {
+            avatar.className = `search-result-avatar user-avatar-fallback ${member.avatar_class || ""}`.trim();
+            avatar.textContent = member.avatar_initial || "?";
+        }
+        main.appendChild(avatar);
+
+        const meta = document.createElement("div");
+        meta.className = "group-member-meta";
+
+        const name = document.createElement("div");
+        name.className = "group-member-name";
+        name.textContent = member.username;
+        meta.appendChild(name);
+
+        const role = document.createElement("div");
+        role.className = "group-member-role";
+        if (member.user_id === currentGroupCreatorId) {
+            role.textContent = "Creator";
+        } else if (member.username === myUsername) {
+            role.textContent = "You";
+        } else {
+            role.textContent = "Member";
+        }
+        meta.appendChild(role);
+
+        main.appendChild(meta);
+        row.appendChild(main);
+
+        const actions = document.createElement("div");
+        actions.className = "group-member-actions";
+        const canRemove = currentGroupCreatorId === Number(meId()) && member.user_id !== currentGroupCreatorId;
+        const canLeave = member.username === myUsername;
+        if (canRemove || canLeave) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "safety-btn secondary";
+            btn.textContent = canLeave ? "Leave" : "Remove";
+            btn.addEventListener("click", () => {
+                void removeGroupMember(member.user_id, canLeave);
+            });
+            actions.appendChild(btn);
+        }
+        row.appendChild(actions);
+        membersList.appendChild(row);
+    });
+}
+
+function applyChatMetaPayload(payload) {
+    if (!payload) {
+        return;
+    }
+    currentChatIsGroup = Boolean(payload.is_group);
+    currentGroupCreatorId = payload.creator_id || null;
+    currentGroupKeyEpoch = Number(payload.group_key_epoch || 1);
+    const chatUserNameEl = document.getElementById("chatUserName");
+    if (chatUserNameEl && payload.username) {
+        chatUserNameEl.textContent = payload.username;
+    }
+    updateChatHeaderAvatar(payload);
+    renderGroupSettings(payload);
+}
+
+function meId() {
+    return Number(window.currentUserId || 0);
+}
+
+async function refreshCurrentChatDetails() {
+    if (!currentChatId) {
+        return;
+    }
+    const response = await authFetch(`/chats/${currentChatId}/details`);
+    const payload = await response.json();
+    if (response.ok && payload?.status === "ok") {
+        applyChatMetaPayload(payload);
+    }
+}
+
+async function saveGroupMetadata() {
+    if (!currentChatId || !currentChatIsGroup) {
+        return;
+    }
+    const titleInput = document.getElementById("groupTitleEditInput");
+    const avatarInput = document.getElementById("groupAvatarInput");
+    const formData = new FormData();
+    formData.append("title", titleInput?.value?.trim() || "");
+    const avatarFile = avatarInput?.files?.[0];
+    if (avatarFile) {
+        formData.append("avatar", avatarFile);
+    }
+
+    const response = await authFetch(`/chats/${currentChatId}/metadata`, {
+        method: "POST",
+        body: formData
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.status !== "ok") {
+        setGroupSettingsFeedback(payload?.detail || payload?.message || "Could not update group.", "error");
+        return;
+    }
+    if (avatarInput) {
+        avatarInput.value = "";
+    }
+    applyChatMetaPayload(payload);
+    await loadChats();
+    setGroupSettingsFeedback("Group updated.", "success");
+}
+
+async function addUserToCurrentGroup() {
+    if (!currentChatId || !currentChatIsGroup) {
+        return;
+    }
+    const input = document.getElementById("groupAddUserInput");
+    const username = input?.value?.trim() || "";
+    if (!username) {
+        setGroupSettingsFeedback("Enter a username to add.", "error");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("username", username);
+    const response = await authFetch(`/chats/${currentChatId}/participants`, {
+        method: "POST",
+        body: formData
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.status !== "ok") {
+        setGroupSettingsFeedback(payload?.detail || payload?.message || "Could not add user.", "error");
+        return;
+    }
+
+    if (Array.isArray(window.otherDeviceBundles) && payload?.added_user?.device_bundles) {
+        window.otherDeviceBundles = [...window.otherDeviceBundles, ...payload.added_user.device_bundles];
+    }
+    if (input) {
+        input.value = "";
+    }
+    await clearGroupSenderStatesForChat(currentChatId);
+    applyChatMetaPayload(payload);
+    await loadChats();
+    setGroupSettingsFeedback("User added to group.", "success");
+}
+
+async function removeGroupMember(userId, isLeaving) {
+    if (!currentChatId || !currentChatIsGroup) {
+        return;
+    }
+    const confirmed = window.confirm(isLeaving ? "Leave this group?" : "Remove this user from the group?");
+    if (!confirmed) {
+        return;
+    }
+
+    const response = await authFetch(`/chats/${currentChatId}/participants/${userId}`, {
+        method: "DELETE"
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.status !== "ok") {
+        setGroupSettingsFeedback(payload?.detail || payload?.message || "Could not remove user.", "error");
+        return;
+    }
+
+    if (isLeaving) {
+        window.location.href = "/messages";
+        return;
+    }
+
+    await clearGroupSenderStatesForChat(currentChatId);
+    await refreshCurrentChatDetails();
+    await loadChats();
+    setGroupSettingsFeedback("User removed from group.", "success");
+}
+
 window.sendMessage = async function () {
     await sendCurrentMessage({
         awaitCryptoBootstrap: async () => {
@@ -171,6 +442,8 @@ window.sendMessage = async function () {
         getOtherIdentityKey: () => window.otherIdentityKey,
         getOtherPrekeyBundle: () => window.otherPrekeyBundle,
         getOtherDeviceBundles: () => window.otherDeviceBundles || [],
+        getCurrentChatIsGroup: () => currentChatIsGroup,
+        getCurrentGroupKeyEpoch: () => currentGroupKeyEpoch,
         refreshChatKeys,
         isKeysReady: () => keysReady,
         logChatState,
@@ -178,11 +451,14 @@ window.sendMessage = async function () {
         deleteRatchetState,
         encryptMessage,
         encryptMessageForDevices,
+        encryptGroupMessage,
         encryptAttachmentData,
         saveAttachmentHistory,
         authFetch,
         onAttachmentSent: () => updateAttachmentComposerState(null),
-        setAttachmentFeedback
+        setAttachmentFeedback,
+        getReplyTargetId: () => window.getActiveReplyTargetId?.() || null,
+        clearReplyTarget: () => window.clearActiveReplyTarget?.()
     });
 };
 
@@ -218,6 +494,7 @@ window.addEventListener("load", async function () {
     bindChatHeaderControls();
     bindMediaViewerControls();
     bindAttachmentAlertControls();
+    bindGroupControls();
     connectUserSocket();
 
     const attachmentInput = document.getElementById("messageAttachmentInput");
@@ -311,6 +588,9 @@ async function applyChatKeys(identityKey, identitySigningKey, prekeyBundle = nul
         deviceBundles,
         username,
         avatarData,
+        setChatKind: (isGroup) => {
+            currentChatIsGroup = Boolean(isGroup);
+        },
         setOtherKeys: ({ identityKey: nextIdentityKey, identitySigningKey: nextIdentitySigningKey, prekeyBundle: nextPrekeyBundle, deviceBundles: nextDeviceBundles }) => {
             window.otherIdentityKey = nextIdentityKey;
             window.otherIdentitySigningKey = nextIdentitySigningKey;
@@ -328,6 +608,7 @@ async function applyChatKeys(identityKey, identitySigningKey, prekeyBundle = nul
         refreshSafetyNumber,
         updateChatReadiness
     });
+    applyChatMetaPayload(avatarData);
 }
 
 async function refreshChatKeys(chatId) {
@@ -379,6 +660,19 @@ function scheduleChatKeyRefresh(chatId, attempt = 0) {
 }
 
 async function refreshSafetyNumber() {
+    if (currentChatIsGroup) {
+        const fingerprintEl = document.getElementById("fingerprint");
+        const statusEl = document.getElementById("verificationStatus");
+        if (fingerprintEl) {
+            fingerprintEl.textContent = "Group chat";
+        }
+        if (statusEl) {
+            statusEl.textContent = "Group";
+            statusEl.classList.remove("verified", "unverified");
+        }
+        return;
+    }
+
     await refreshSafetyNumberFlow({
         otherIdentitySigningKey: window.otherIdentitySigningKey,
         myIdentitySigningKey: myIdentitySigningKeyCache,
@@ -402,6 +696,9 @@ async function openChatSocket(chatId) {
     historyController.reset();
     resetRenderedMessages();
     clearDecryptedAttachmentCache();
+    if (typeof window.clearActiveReplyTarget === "function") {
+        window.clearActiveReplyTarget();
+    }
 
     await deleteRatchetState(chatId);
     logChatState("cleared local ratchet state before websocket history sync", { chatId });
@@ -438,6 +735,13 @@ async function openChatSocket(chatId) {
         },
         onChatDeleted: async (data) => {
             await handleChatDeletedEvent(data);
+        },
+        onChatUpdated: async (data) => {
+            if (data?.type === "chat_participants_updated" && data?.chat_id) {
+                await clearGroupSenderStatesForChat(data.chat_id);
+            }
+            applyChatMetaPayload(data);
+            await loadChats();
         },
         onMessage: (data) => {
             if (data.type === "message_status") {
@@ -513,30 +817,189 @@ function connectUserSocket() {
         },
         onChatDeleted: async (data) => {
             await handleChatDeletedEvent(data);
+        },
+        onChatUpdated: async (data) => {
+            await loadChats();
+            if (String(data.chat_id) === String(currentChatId)) {
+                if (data?.type === "chat_participants_updated") {
+                    await clearGroupSenderStatesForChat(currentChatId);
+                }
+                applyChatMetaPayload(data);
+            }
         }
     });
 }
 
 function bindDeletionControls() {
-    document.addEventListener("click", async (event) => {
-        const deleteSelfButton = event.target.closest("[data-delete-message-self]");
-        if (deleteSelfButton) {
-            const messageId = Number(deleteSelfButton.getAttribute("data-delete-message-self") || "0");
-            if (messageId > 0) {
-                await deleteMessageForSelf(messageId);
-            }
+    const chat = document.getElementById("chat");
+    const contextMenu = document.getElementById("messageContextMenu");
+    const replyBtn = document.getElementById("messageContextReply");
+    const deleteForMeBtn = document.getElementById("messageContextDeleteForMe");
+    const deleteForAllBtn = document.getElementById("messageContextDeleteForAll");
+    const replyBanner = document.getElementById("replyComposer");
+    const replySender = document.getElementById("replyComposerSender");
+    const replyPreview = document.getElementById("replyComposerPreview");
+    const replyCloseBtn = document.getElementById("replyComposerClose");
+
+    const clearReplyTarget = () => {
+        activeReplyTarget = null;
+        if (replyBanner) {
+            replyBanner.hidden = true;
+        }
+        if (replySender) {
+            replySender.textContent = "";
+        }
+        if (replyPreview) {
+            replyPreview.textContent = "";
+        }
+    };
+
+    const setReplyTarget = (row) => {
+        const messageId = Number(row?.dataset?.messageId || "0");
+        if (messageId <= 0) {
+            clearReplyTarget();
             return;
         }
 
-        const deleteAllButton = event.target.closest("[data-delete-message-all]");
-        if (deleteAllButton) {
-            const messageId = Number(deleteAllButton.getAttribute("data-delete-message-all") || "0");
-            if (messageId > 0) {
-                await deleteMessageForAll(messageId);
-            }
+        activeReplyTarget = {
+            messageId,
+            senderLabel: row.dataset.senderLabel || "Reply",
+            previewText: row.dataset.messagePreview || "Original message"
+        };
+
+        if (replySender) {
+            replySender.textContent = activeReplyTarget.senderLabel;
+        }
+        if (replyPreview) {
+            replyPreview.textContent = activeReplyTarget.previewText;
+        }
+        if (replyBanner) {
+            replyBanner.hidden = false;
+        }
+    };
+
+    const closeMessageContextMenu = () => {
+        activeMessageContext = null;
+        if (!contextMenu) {
             return;
         }
+        contextMenu.hidden = true;
+        contextMenu.style.left = "";
+        contextMenu.style.top = "";
+    };
+
+    const openMessageContextMenu = (event, row) => {
+        if (!contextMenu) {
+            return;
+        }
+
+        const messageId = Number(row?.dataset?.messageId || "0");
+        if (messageId <= 0) {
+            return;
+        }
+
+        const isOwnMessage = row.dataset.ownMessage === "1";
+        activeMessageContext = {
+            messageId,
+            isOwnMessage,
+            row
+        };
+
+        if (deleteForAllBtn) {
+            deleteForAllBtn.hidden = !isOwnMessage;
+        }
+
+        contextMenu.hidden = false;
+
+        const menuWidth = 220;
+        const menuHeight = isOwnMessage ? 160 : 112;
+        const maxLeft = Math.max(12, window.innerWidth - menuWidth - 12);
+        const maxTop = Math.max(12, window.innerHeight - menuHeight - 12);
+        const left = Math.min(event.clientX, maxLeft);
+        const top = Math.min(event.clientY, maxTop);
+
+        contextMenu.style.left = `${left}px`;
+        contextMenu.style.top = `${top}px`;
+    };
+
+    if (chat) {
+        chat.addEventListener("contextmenu", (event) => {
+            const row = event.target.closest(".chat-message[data-message-id]");
+            if (!row) {
+                closeMessageContextMenu();
+                return;
+            }
+
+            event.preventDefault();
+            openMessageContextMenu(event, row);
+        });
+    }
+
+    if (deleteForMeBtn) {
+        deleteForMeBtn.addEventListener("click", async () => {
+            const messageId = activeMessageContext?.messageId || 0;
+            closeMessageContextMenu();
+            if (messageId > 0) {
+                await deleteMessageForSelf(messageId);
+            }
+        });
+    }
+
+    if (replyBtn) {
+        replyBtn.addEventListener("click", () => {
+            const row = activeMessageContext?.row || null;
+            closeMessageContextMenu();
+            if (!row) {
+                return;
+            }
+            setReplyTarget(row);
+            document.getElementById("messageInput")?.focus();
+        });
+    }
+
+    if (deleteForAllBtn) {
+        deleteForAllBtn.addEventListener("click", async () => {
+            const messageId = activeMessageContext?.messageId || 0;
+            const isOwnMessage = Boolean(activeMessageContext?.isOwnMessage);
+            closeMessageContextMenu();
+            if (messageId > 0 && isOwnMessage) {
+                await deleteMessageForAll(messageId);
+            }
+        });
+    }
+
+    document.addEventListener("click", (event) => {
+        if (!contextMenu || contextMenu.hidden) {
+            return;
+        }
+        if (event.target.closest("#messageContextMenu")) {
+            return;
+        }
+        closeMessageContextMenu();
     });
+
+    document.addEventListener("scroll", () => {
+        closeMessageContextMenu();
+    }, true);
+
+    window.addEventListener("resize", () => {
+        closeMessageContextMenu();
+    });
+
+    window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            closeMessageContextMenu();
+        }
+    });
+
+    if (replyCloseBtn) {
+        replyCloseBtn.addEventListener("click", () => {
+            clearReplyTarget();
+        });
+    }
+
+    window.getActiveReplyTargetId = () => activeReplyTarget?.messageId || null;
+    window.clearActiveReplyTarget = clearReplyTarget;
 
     const deleteChatForMeBtn = document.getElementById("deleteChatForMeBtn");
     if (deleteChatForMeBtn) {
