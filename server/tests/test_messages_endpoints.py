@@ -57,6 +57,7 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["chat_id"] == 1
+    assert payload["session_reset"] is False
     assert payload["identity_key"] == "public-key-user2"
     assert payload["identity_signing_key"] == "identity-signing-user2"
     assert payload["username"] == "user2"
@@ -76,6 +77,7 @@ def test_messages_endpoints_and_chat_bootstrap(client, second_client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["chat_id"] == 1
+    assert payload["session_reset"] is False
     assert payload["prekey_bundle"] == {
         "identity_key": "public-key-user2",
         "identity_signing_key": "identity-signing-user2",
@@ -371,6 +373,7 @@ def test_chat_delete_and_restart_reuses_existing_chat(client, second_client, db_
     restart_response = client.post("/messages/start", data={"username": "user2"})
     assert restart_response.status_code == 200
     assert restart_response.json()["chat_id"] == chat_id
+    assert restart_response.json()["session_reset"] is True
 
     db_session.refresh(chat)
     assert chat.user1_hidden is False
@@ -387,6 +390,64 @@ def test_chat_delete_and_restart_reuses_existing_chat(client, second_client, db_
     second_start = second_client.post("/messages/start", data={"username": "user1"})
     assert second_start.status_code == 200
     assert second_start.json()["chat_id"] == chat_id
+    assert second_start.json()["session_reset"] is True
+
+
+def test_direct_chat_restart_keeps_old_messages_cleared_for_both_users(client, second_client, db_session):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    assert upload_x3dh_keys(
+        client,
+        identity_key="public-key-user1",
+        identity_signing_key="identity-signing-user1",
+        signed_prekey="signed-prekey-user1",
+        signed_prekey_signature="signed-prekey-signature-user1",
+        signed_prekey_key_id=201,
+        one_time_prekeys=[],
+    ).status_code == 200
+    assert upload_x3dh_keys(
+        second_client,
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    ).status_code == 200
+
+    start_response = client.post("/messages/start", data={"username": "user2"})
+    assert start_response.status_code == 200
+    chat_id = start_response.json()["chat_id"]
+
+    first_message_time = utc_now()
+    db_session.add(Message(chat_id=chat_id, sender_id=1, content="old-message", created_at=first_message_time))
+    db_session.commit()
+
+    delete_response = client.post(f"/chats/{chat_id}/delete-all")
+    assert delete_response.status_code == 200
+
+    restart_user1 = client.post("/messages/start", data={"username": "user2"})
+    restart_user2 = second_client.post("/messages/start", data={"username": "user1"})
+    assert restart_user1.status_code == 200
+    assert restart_user2.status_code == 200
+    assert restart_user1.json()["session_reset"] is True
+    assert restart_user2.json()["session_reset"] is True
+
+    chat = db_session.query(Chat).filter(Chat.id == chat_id).first()
+    assert chat is not None
+    assert chat.user1_hidden is False
+    assert chat.user2_hidden is False
+    assert chat.user1_cleared_at is not None
+    assert chat.user2_cleared_at is not None
+
+    visible_for_user1 = db_session.query(Message).filter(Message.chat_id == chat_id).all()
+    assert len(visible_for_user1) == 1
+    assert visible_for_user1[0].content == "old-message"
+    assert visible_for_user1[0].created_at <= chat.user1_cleared_at
+    assert visible_for_user1[0].created_at <= chat.user2_cleared_at
 
 
 def test_group_chat_start_and_keys_payload(client, second_client):
@@ -555,3 +616,83 @@ def test_group_chat_metadata_and_participant_management(client, second_client):
     assert add_payload["status"] == "ok"
     assert add_payload["added_user"]["username"] == "user3"
     assert add_payload["group_key_epoch"] == 3
+
+
+def test_group_chat_can_start_with_one_other_user(client, second_client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    assert upload_x3dh_keys(
+        second_client,
+        device_id="user2-device-1",
+        device_name="User2 device",
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[],
+    ).status_code == 200
+
+    response = client.post(
+        "/messages/start-group",
+        data={
+            "title": "Duo group",
+            "usernames": '["user2"]',
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["is_group"] is True
+    assert payload["username"] == "Duo group"
+    assert len(payload["participants"]) == 1
+    assert payload["participants"][0]["username"] == "user2"
+
+
+def test_direct_chat_restart_after_delete_all_returns_fresh_session_bootstrap(client, second_client):
+    assert register_user(client, "user1@example.com").status_code == 303
+    assert register_user(second_client, "user2@example.com").status_code == 303
+
+    assert login_user(client, "user1@example.com").status_code == 303
+    assert login_user(second_client, "user2@example.com").status_code == 303
+
+    assert upload_x3dh_keys(
+        second_client,
+        identity_key="public-key-user2",
+        identity_signing_key="identity-signing-user2",
+        signed_prekey="signed-prekey-user2",
+        signed_prekey_signature="signed-prekey-signature-user2",
+        signed_prekey_key_id=101,
+        one_time_prekeys=[
+            {"key_id": 1001, "public_key": "otpk-user2-1"},
+            {"key_id": 1002, "public_key": "otpk-user2-2"},
+        ],
+    ).status_code == 200
+
+    first_start = client.post("/messages/start", data={"username": "user2"})
+    assert first_start.status_code == 200
+    first_payload = first_start.json()
+    assert first_payload["chat_id"] == 1
+    assert first_payload["session_reset"] is False
+    assert first_payload["prekey_bundle"]["one_time_prekey"] == {"key_id": 1001, "public_key": "otpk-user2-1"}
+
+    delete_response = client.post("/chats/1/delete-all")
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"status": "ok"}
+
+    second_start = client.post("/messages/start", data={"username": "user2"})
+    assert second_start.status_code == 200
+    second_payload = second_start.json()
+    assert second_payload["chat_id"] == 1
+    assert second_payload["session_reset"] is True
+    assert second_payload["prekey_bundle"]["one_time_prekey"] == {"key_id": 1002, "public_key": "otpk-user2-2"}
+
+    forced_keys_response = client.get("/messages/get_keys", params={"chat_id": 1, "force_session_reset": 1})
+    assert forced_keys_response.status_code == 200
+    forced_keys_payload = forced_keys_response.json()
+    assert forced_keys_payload["status"] == "ok"
+    assert forced_keys_payload["prekey_bundle"]["one_time_prekey"] is None

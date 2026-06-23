@@ -3,30 +3,31 @@ version: "3.9"
 services:
   web:
     build: .
-    volumes:
-      - ./server:/code/server
-      - ./client:/code/client
-      - avatar_uploads:/code/client/static/uploads/avatars
-      - message_uploads:/code/client/static/uploads/messages
+    restart: unless-stopped
     environment:
       - TEMPLATES_DIR=/code/client/templates
+      - STATIC_DIR=/code/client/static
       - AVATAR_UPLOAD_DIR=/code/client/static/uploads/avatars
       - MESSAGE_UPLOAD_DIR=/code/client/static/uploads/messages
+      - UVICORN_RELOAD=0
+      - RUN_DB_MIGRATIONS=1
+      - DB_AUTO_BOOTSTRAP=false
     ports:
       - "8000:8000"
-
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     env_file:
       - .env
+    volumes:
+      - avatars_data:/code/client/static/uploads/avatars
+      - messages_data:/code/client/static/uploads/messages
 
   db:
     image: postgres:15
-    restart: always
+    restart: unless-stopped
     env_file:
       - .env
-    ports:
-      - "5432:5432"
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -35,8 +36,13 @@ services:
       - /var/run/postgresql
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   postgres_data:
-  avatar_uploads:
-  message_uploads:
+  avatars_data:
+  messages_data:

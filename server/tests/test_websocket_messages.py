@@ -37,6 +37,14 @@ def receive_until_type(websocket, expected_type: str):
             return payload
 
 
+def assert_message_payload_contains(actual_payload, expected_payload):
+    for key, expected_value in expected_payload.items():
+        assert actual_payload.get(key) == expected_value
+
+    assert "created_at" in actual_payload
+    assert "read_at" in actual_payload
+
+
 def upload_default_x3dh_bundle(test_client):
     return upload_x3dh_keys(
         test_client,
@@ -91,7 +99,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client):
                 receiver_message = receive_until_type(receiver_ws, "message")
                 first_notification = receive_json_with_timeout(user_ws)
 
-    assert sender_message == {
+    assert_message_payload_contains(sender_message, {
         "type": "message",
         "message_id": 1,
         "reply_to_message_id": None,
@@ -102,7 +110,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client):
         "delivery_status": "read",
         "attachment": None,
         "deleted_for_all": False,
-    }
+    })
     assert receiver_message == sender_message
     assert first_notification == {"type": "new_message", "chat_id": chat_id}
 
@@ -122,7 +130,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client):
         history_complete = receive_json_with_timeout(history_ws)
 
     assert history_status["type"] == "status"
-    assert history_message == {
+    assert_message_payload_contains(history_message, {
         "type": "message",
         "message_id": 1,
         "reply_to_message_id": None,
@@ -133,7 +141,7 @@ def test_websocket_chat_delivery_and_message_persistence(client, second_client):
         "delivery_status": "read",
         "attachment": None,
         "deleted_for_all": False,
-    }
+    })
     assert history_complete == {"type": "history_complete"}
 
 
@@ -163,7 +171,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
         for expected_id, payload in enumerate(message_payloads, start=1):
             sender_ws.send_text(payload)
             echoed_message = receive_until_type(sender_ws, "message")
-            assert echoed_message == {
+            assert_message_payload_contains(echoed_message, {
                 "type": "message",
                 "message_id": expected_id,
                 "reply_to_message_id": None,
@@ -174,7 +182,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
                 "delivery_status": "sent",
                 "attachment": None,
                 "deleted_for_all": False,
-            }
+            })
 
     db_session = SessionLocal()
     try:
@@ -196,8 +204,8 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
         ]
         history_complete = receive_json_with_timeout(reconnected_ws)
 
-    assert history_messages == [
-        {
+    assert len(history_messages) == 3
+    assert_message_payload_contains(history_messages[0], {
             "type": "message",
             "message_id": 1,
             "reply_to_message_id": None,
@@ -208,8 +216,8 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
             "delivery_status": "read",
             "attachment": None,
             "deleted_for_all": False,
-        },
-        {
+        })
+    assert_message_payload_contains(history_messages[1], {
             "type": "message",
             "message_id": 2,
             "reply_to_message_id": None,
@@ -220,8 +228,8 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
             "delivery_status": "read",
             "attachment": None,
             "deleted_for_all": False,
-        },
-        {
+        })
+    assert_message_payload_contains(history_messages[2], {
             "type": "message",
             "message_id": 3,
             "reply_to_message_id": None,
@@ -232,8 +240,7 @@ def test_websocket_chat_history_reconnect_preserves_order(client, second_client)
             "delivery_status": "read",
             "attachment": None,
             "deleted_for_all": False,
-        },
-    ]
+        })
     assert history_complete == {"type": "history_complete"}
 
 
@@ -269,7 +276,7 @@ def test_websocket_media_message_persists_attachment(client, second_client):
         sender_ws.send_json(media_payload)
         echoed_message = receive_until_type(sender_ws, "message")
 
-    assert echoed_message == {
+    assert_message_payload_contains(echoed_message, {
         "type": "message",
         "message_id": 1,
         "reply_to_message_id": None,
@@ -286,7 +293,7 @@ def test_websocket_media_message_persists_attachment(client, second_client):
             "size": 12345,
         },
         "deleted_for_all": False,
-    }
+    })
 
     db_session = SessionLocal()
     try:

@@ -1,6 +1,73 @@
 const renderedMessages = new Map();
 const pendingMessageStatuses = new Map();
 
+function formatMessageTime(value) {
+    if (!value) {
+        return "";
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return "";
+    }
+
+    return parsed.toLocaleTimeString("uk-UA", {
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
+function formatMessageDateLabel(value) {
+    if (!value) {
+        return "";
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return "";
+    }
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    const diffDays = Math.round((today.getTime() - target.getTime()) / 86400000);
+    const timePart = formatMessageTime(value);
+
+    if (diffDays === 0) {
+        return timePart;
+    }
+
+    if (diffDays === 1) {
+        return `Вчора ${timePart}`;
+    }
+
+    return parsed.toLocaleString("uk-UA", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
+function formatExactMessageDate(value) {
+    if (!value) {
+        return "";
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return "";
+    }
+
+    return parsed.toLocaleString("uk-UA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
 function getStatusRank(status) {
     if (status === "read") return 3;
     if (status === "delivered") return 2;
@@ -168,18 +235,37 @@ export function bindChatHeaderControls() {
     const toggle = document.getElementById("chatInfoToggle");
     const close = document.getElementById("chatInfoClose");
     const panel = document.getElementById("chatInfoPanel");
+    const detailsToggle = document.getElementById("chatDetailsToggle");
+    const detailsCard = document.getElementById("chatDetailsCard");
+    const panelTitle = document.querySelector("#chatInfoPanel .chat-info-title");
 
     if (!toggle || !close || !panel) {
         return;
     }
 
+    if (panelTitle) {
+        panelTitle.textContent = "Дії чату";
+    }
+
     toggle.onclick = function () {
         panel.hidden = !panel.hidden;
+        if (panel.hidden && detailsCard) {
+            detailsCard.hidden = true;
+        }
     };
 
     close.onclick = function () {
         panel.hidden = true;
+        if (detailsCard) {
+            detailsCard.hidden = true;
+        }
     };
+
+    if (detailsToggle && detailsCard) {
+        detailsToggle.onclick = function () {
+            detailsCard.hidden = !detailsCard.hidden;
+        };
+    }
 }
 
 export function bindMediaViewerControls() {
@@ -216,7 +302,9 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         isOwnMessage = false,
         attachment = null,
         deletedForAll = false,
-        replyTo = null
+        replyTo = null,
+        createdAt = null,
+        readAt = null
     } = options;
 
     if (messageId && renderedMessages.has(messageId)) {
@@ -233,6 +321,8 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
     div.dataset.messagePreview = (text && String(text).trim())
         ? String(text).trim().replace(/\s+/g, " ").slice(0, 140)
         : (attachment ? "[Attachment]" : "");
+    div.dataset.createdAt = createdAt || new Date().toISOString();
+    div.dataset.readAt = readAt || "";
 
     const sender = document.createElement("b");
     sender.textContent = `${senderLabel}:`;
@@ -258,6 +348,15 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         div.appendChild(body);
     }
 
+    const meta = document.createElement("span");
+    meta.className = "message-meta";
+    meta.title = formatExactMessageDate(div.dataset.createdAt) || "";
+
+    const timeNode = document.createElement("span");
+    timeNode.className = "message-time";
+    timeNode.textContent = formatMessageDateLabel(div.dataset.createdAt);
+    meta.appendChild(timeNode);
+
     if (isOwnMessage && messageId) {
         const effectiveStatus = resolveStatus(
             deliveryStatus,
@@ -270,10 +369,23 @@ export function renderMessage(chat, senderLabel, text, options = {}) {
         status.setAttribute("aria-label", getStatusLabel(effectiveStatus));
         status.title = getStatusLabel(effectiveStatus);
         status.textContent = "";
-        div.appendChild(document.createTextNode(" "));
-        div.appendChild(status);
+        meta.appendChild(status);
+
+        const readNode = document.createElement("span");
+        readNode.className = "message-read-time";
+        readNode.dataset.readTime = "1";
+        readNode.title = div.dataset.readAt ? formatExactMessageDate(div.dataset.readAt) : "";
+        if (div.dataset.readAt && effectiveStatus === "read") {
+            readNode.textContent = `Прочитано ${formatMessageTime(div.dataset.readAt)}`;
+        } else {
+            readNode.textContent = "";
+        }
+        meta.appendChild(readNode);
         pendingMessageStatuses.delete(messageId);
     }
+
+    div.appendChild(document.createTextNode(" "));
+    div.appendChild(meta);
 
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
@@ -317,7 +429,7 @@ export function markMessageDeletedForAll(messageId) {
     }
 }
 
-export function updateMessageStatus(messageId, status) {
+export function updateMessageStatus(messageId, status, readAt = null) {
     const row = renderedMessages.get(messageId) || document.querySelector(`[data-message-id="${messageId}"]`);
     if (!row) {
         pendingMessageStatuses.set(
@@ -345,6 +457,19 @@ export function updateMessageStatus(messageId, status) {
     statusNode.setAttribute("aria-label", getStatusLabel(nextStatus));
     statusNode.title = getStatusLabel(nextStatus);
     statusNode.textContent = "";
+    if (readAt) {
+        row.dataset.readAt = readAt;
+    } else if (nextStatus === "read" && !row.dataset.readAt) {
+        row.dataset.readAt = new Date().toISOString();
+    }
+
+    const readNode = row.querySelector("[data-read-time='1']");
+    if (readNode) {
+        readNode.title = row.dataset.readAt ? formatExactMessageDate(row.dataset.readAt) : "";
+        readNode.textContent = nextStatus === "read" && row.dataset.readAt
+            ? `Прочитано ${formatMessageTime(row.dataset.readAt)}`
+            : "";
+    }
     pendingMessageStatuses.delete(messageId);
 }
 

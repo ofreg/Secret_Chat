@@ -29,8 +29,9 @@
 
                     <label class="form-label">
                         Фото профілю
-                        <input class="text-input" type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif">
+                        <input id="avatarInput" class="text-input" type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif">
                     </label>
+                    <div class="card-copy">Після вибору фото можна буде вибрати потрібну область під круглу аватарку.</div>
 
                     <div class="helper-row">
                         <button type="submit" class="primary-btn">Зберегти</button>
@@ -85,6 +86,30 @@
             </aside>
         </div>
     </section>
+</div>
+
+<div id="avatarCropModal" class="forward-modal" hidden>
+    <div class="forward-modal-card">
+        <div class="forward-modal-header">
+            <h4 class="forward-modal-title">Оберіть область аватарки</h4>
+            <button id="avatarCropCancel" class="forward-modal-close" type="button" aria-label="Close crop dialog">×</button>
+        </div>
+        <div class="card-copy">Перетягуйте зображення та змінюйте масштаб, щоб кругла аватарка виглядала правильно.</div>
+        <div class="avatar-crop-shell">
+            <div id="avatarCropViewport" class="avatar-crop-viewport">
+                <img id="avatarCropImage" class="avatar-crop-image" alt="Avatar crop preview">
+                <div class="avatar-crop-mask"></div>
+            </div>
+        </div>
+        <label class="form-label">
+            Масштаб
+            <input id="avatarCropZoom" type="range" min="1" max="3" step="0.01" value="1">
+        </label>
+        <div class="helper-row">
+            <button id="avatarCropApply" type="button" class="primary-btn">Застосувати</button>
+            <button id="avatarCropReset" type="button" class="secondary-btn">Скинути</button>
+        </div>
+    </div>
 </div>
 
 {% endblock %}

@@ -173,6 +173,8 @@
 .search-result-avatar {
     width: 36px;
     height: 36px;
+    min-width: 36px;
+    aspect-ratio: 1 / 1;
     border-radius: 999px;
     flex: 0 0 36px;
     display: grid;
@@ -187,6 +189,7 @@
     width: 42px;
     height: 42px;
     flex-basis: 42px;
+    min-width: 42px;
 }
 
 .user-avatar-image,
@@ -194,7 +197,9 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    object-position: center;
     display: block;
+    border-radius: inherit;
 }
 
 .user-avatar-fallback,
@@ -223,12 +228,78 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+    flex: 1 1 auto;
 }
 
 .search-result-actions {
     display: flex;
     gap: 8px;
+    flex-wrap: nowrap;
+    align-items: center;
+    flex: 0 0 auto;
+}
+
+.search-result-action-btn {
+    padding: 10px 14px;
+    white-space: nowrap;
+}
+
+.direct-chat-actions {
+    margin-top: 14px;
+}
+
+.group-start-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.group-start-selected {
+    display: flex;
     flex-wrap: wrap;
+    gap: 8px;
+}
+
+.group-start-results {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.group-start-hint {
+    color: #6b7f92;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.chat-primary-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.chat-primary-actions > .safety-btn,
+.chat-primary-actions > .direct-chat-actions {
+    width: 100%;
+}
+
+.chat-primary-actions .safety-btn {
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.chat-primary-actions .direct-chat-actions .safety-btn {
+    width: 100%;
+}
+
+.chat-details-toggle {
+    margin-top: 4px;
+}
+
+#chatDetailsCard + .direct-chat-actions {
+    display: none;
 }
 
 .group-builder {
@@ -246,6 +317,14 @@
     font-weight: 700;
 }
 
+.group-builder[hidden] {
+    display: none;
+}
+
+#searchResults + .group-builder {
+    display: none;
+}
+
 .group-builder-members {
     display: flex;
     flex-wrap: wrap;
@@ -254,7 +333,13 @@
 }
 
 .group-builder-members:empty::before {
-    content: "Add at least two users";
+    content: "Додайте щонайменше двох користувачів";
+    color: #6b7f92;
+    font-size: 12px;
+}
+
+.group-builder-hint {
+    margin-top: 10px;
     color: #6b7f92;
     font-size: 12px;
 }
@@ -585,6 +670,34 @@
 .message-status.is-read::after {
     content: "\2713";
     left: 6px;
+}
+
+.message-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+    color: #7a90a7;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.message-time,
+.message-read-time {
+    display: inline-block;
+}
+
+.message-read-time {
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-width 0.18s ease, opacity 0.18s ease;
+}
+
+.chat-message:hover .message-read-time,
+.chat-message:focus-within .message-read-time {
+    max-width: 140px;
+    opacity: 1;
 }
 
 .message-attachment {
@@ -978,7 +1091,7 @@ window.currentUserId = {{ current_user_id }};
 </script>
 
 <script type="module" src="/static/js/searchBootstrap.js?v=20260612a"></script>
-<script type="module" src="/static/js/messages.js?v=20260618a"></script>
+<script type="module" src="/static/js/messages.js?v=20260623c"></script>
 
 <div class="container">
     <div class="sidebar">
@@ -1007,6 +1120,12 @@ window.currentUserId = {{ current_user_id }};
 
         <h4 class="search-title">Пошук користувача</h4>
         <input id="searchInput" class="text-input search-input" placeholder="Введіть ім'я користувача">
+        <div id="groupBuilder" class="group-builder" hidden>
+            <div class="group-builder-title">Нова група</div>
+            <input id="groupTitleInput" class="text-input search-input" placeholder="Назва групи та Enter">
+            <div id="groupMembers" class="group-builder-members"></div>
+            <div class="group-builder-hint">Після вибору учасників введіть назву групи та натисніть Enter.</div>
+        </div>
         <div id="searchResults"></div>
 
         <div class="group-builder">
@@ -1065,11 +1184,20 @@ window.currentUserId = {{ current_user_id }};
 
             <aside class="chat-info-panel" id="chatInfoPanel" hidden>
                 <div class="chat-info-header">
-                    <div class="chat-info-title">Інформація про чат</div>
+                    <div class="chat-info-title">Дії чату</div>
                     <button class="chat-info-close" id="chatInfoClose" type="button" aria-label="Закрити панель">×</button>
                 </div>
 
-                <div class="safety-card">
+                <div class="chat-primary-actions">
+                    <div id="directChatActions" class="direct-chat-actions" hidden>
+                        <button class="safety-btn secondary" id="startGroupFromDirectBtn" type="button">Почати груповий чат</button>
+                    </div>
+                    <button class="safety-btn secondary" id="deleteChatForMeBtn" type="button">Видалити для мене</button>
+                    <button class="safety-btn secondary" id="deleteChatForAllBtn" type="button">Видалити для всіх</button>
+                    <button class="safety-btn secondary chat-details-toggle" id="chatDetailsToggle" type="button">Інформація про чат</button>
+                </div>
+
+                <div class="safety-card" id="chatDetailsCard" hidden>
                     <div class="safety-row">
                         <div>
                             <div class="safety-label">Safety Fingerprint</div>
@@ -1083,8 +1211,6 @@ window.currentUserId = {{ current_user_id }};
                         <button class="safety-btn secondary" id="resetFingerprintBtn" type="button">Reset</button>
                         <button class="safety-btn secondary" id="copyFingerprintBtn" type="button">Copy</button>
                         <button class="safety-btn secondary" id="resetIndexedDbBtn" type="button">Reset local DB</button>
-                        <button class="safety-btn secondary" id="deleteChatForMeBtn" type="button">Delete chat for me</button>
-                        <button class="safety-btn secondary" id="deleteChatForAllBtn" type="button">Delete chat for all</button>
                     </div>
 
                     <div class="qr-block">
@@ -1094,6 +1220,10 @@ window.currentUserId = {{ current_user_id }};
                         </div>
                     </div>
                     <div class="safety-feedback" id="verificationFeedback" aria-live="polite"></div>
+                </div>
+
+                <div class="direct-chat-actions legacy-chat-action-duplicate" hidden aria-hidden="true">
+                    <button class="safety-btn secondary" id="legacyStartGroupFromDirectBtn" type="button">Почати груповий чат</button>
                 </div>
 
                 <div id="groupSettings" class="group-settings" hidden>
@@ -1130,6 +1260,23 @@ window.currentUserId = {{ current_user_id }};
 <div id="attachmentAlert" class="attachment-alert" hidden>
     <div id="attachmentAlertBody" class="attachment-alert-body"></div>
     <button id="attachmentAlertClose" class="attachment-alert-close" type="button" aria-label="Закрити повідомлення">×</button>
+</div>
+
+<div id="groupStartModal" class="forward-modal" hidden>
+    <div class="forward-modal-card">
+        <div class="forward-modal-header">
+            <h3 class="forward-modal-title">Почати груповий чат</h3>
+            <button id="groupStartModalClose" class="forward-modal-close" type="button" aria-label="Закрити">×</button>
+        </div>
+        <div class="group-start-body">
+            <input id="groupStartTitleInput" class="text-input" placeholder="Назва групи">
+            <div id="groupStartSelected" class="group-start-selected"></div>
+            <input id="groupStartSearchInput" class="text-input" placeholder="Знайти ще користувачів">
+            <div id="groupStartSearchResults" class="group-start-results"></div>
+            <div class="group-start-hint">Співрозмовник з поточного особистого чату додається автоматично. За потреби ти можеш додати й інших учасників.</div>
+            <button id="groupStartCreateBtn" class="primary-btn" type="button">Створити групу</button>
+        </div>
+    </div>
 </div>
 
 <div id="messageContextMenu" class="message-context-menu" hidden>

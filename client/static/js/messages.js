@@ -1,4 +1,5 @@
 import {
+    clearLocalChatState,
     clearGroupSenderStatesForChat,
     clearMessageDeletedForSelf,
     ensureLocalAccountBinding,
@@ -15,7 +16,7 @@ import {
     restoreCloudBackupIfNeeded,
     resetLocalCryptoState,
     saveVerificationStatus
-} from "./crypto.js?v=20260612b";
+} from "./crypto.js?v=20260623b";
 // Bump module query strings when group E2EE runtime changes so browsers do not reuse stale modules.
 import { authFetch, ensureSession } from "./authClient.js?v=20260601b";
 import {
@@ -24,7 +25,7 @@ import {
     encryptGroupMessage,
     encryptMessage,
     encryptMessageForDevices
-} from "./chatCrypto.js?v=20260618a";
+} from "./chatCrypto.js?v=20260623a";
 import {
     bindMediaViewerControls,
     bindAttachmentAlertControls,
@@ -39,20 +40,20 @@ import {
     updateAttachmentComposerState,
     updateMessageStatus,
     updateChatHeaderAvatar
-} from "./messagesUi.js?v=20260612c";
+} from "./messagesUi.js?v=20260623a";
 import {
     createChatSocket,
     createUserSocket,
     reloadChatList
 } from "./messagesSockets.js?v=20260612b";
-import { createHistoryController } from "./messagesHistory.js?v=20260612d";
+import { createHistoryController } from "./messagesHistory.js?v=20260623a";
 import {
     applyChatKeysFlow,
     initializeChatFlow,
     refreshChatKeysFlow,
     refreshSafetyNumberFlow,
     sendCurrentMessage
-} from "./messagesChatFlow.js?v=20260612c";
+} from "./messagesChatFlow.js?v=20260623a";
 import { updateVerificationUiFlow } from "./messagesVerification.js?v=20260420i";
 
 const DEBUG_CHAT = false;
@@ -68,6 +69,7 @@ let currentChatId = null;
 let currentChatIsGroup = false;
 let currentGroupCreatorId = null;
 let currentGroupKeyEpoch = 1;
+let currentDirectChatPeer = null;
 let historySyncInProgress = false;
 let deferredLiveMessages = [];
 let currentFingerprint = null;
@@ -307,9 +309,27 @@ function applyChatMetaPayload(payload) {
     currentChatIsGroup = Boolean(payload.is_group);
     currentGroupCreatorId = payload.creator_id || null;
     currentGroupKeyEpoch = Number(payload.group_key_epoch || 1);
+    currentDirectChatPeer = currentChatIsGroup ? null : {
+        username: payload.username,
+        avatar_url: payload.avatar_url || null,
+        avatar_initial: payload.avatar_initial || "?",
+        avatar_class: payload.avatar_class || ""
+    };
     const chatUserNameEl = document.getElementById("chatUserName");
+    const directChatActions = document.getElementById("directChatActions");
+    const startGroupBtn = document.getElementById("startGroupFromDirectBtn");
     if (chatUserNameEl && payload.username) {
         chatUserNameEl.textContent = payload.username;
+    }
+    if (directChatActions) {
+        directChatActions.hidden = currentChatIsGroup || !currentDirectChatPeer?.username;
+    }
+    if (startGroupBtn) {
+        startGroupBtn.onclick = () => {
+            if (currentDirectChatPeer?.username) {
+                window.openDirectGroupBuilder?.(currentDirectChatPeer);
+            }
+        };
     }
     updateChatHeaderAvatar(payload);
     renderGroupSettings(payload);
@@ -700,8 +720,8 @@ async function openChatSocket(chatId) {
         window.clearActiveReplyTarget();
     }
 
-    await deleteRatchetState(chatId);
-    logChatState("cleared local ratchet state before websocket history sync", { chatId });
+    await clearLocalChatState(chatId);
+    logChatState("cleared local chat state before websocket history sync", { chatId });
 
     const chat = document.getElementById("chat");
     if (chat) {
@@ -745,7 +765,7 @@ async function openChatSocket(chatId) {
         },
         onMessage: (data) => {
             if (data.type === "message_status") {
-                updateMessageStatus(data.message_id, data.delivery_status);
+                updateMessageStatus(data.message_id, data.delivery_status, data.read_at || null);
                 return;
             }
 
@@ -1107,6 +1127,8 @@ async function handleChatDeletedEvent(data) {
         return;
     }
 
+    await clearLocalChatState(data.chat_id);
+
     await loadChats();
 
     if (String(data.chat_id) === String(currentChatId)) {
@@ -1121,6 +1143,9 @@ async function loadChats() {
     }
 
     await reloadChatList(authFetch);
+    if (currentChatId) {
+        await refreshCurrentChatDetails();
+    }
 }
 
 function getCurrentChatId() {

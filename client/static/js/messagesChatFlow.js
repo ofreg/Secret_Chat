@@ -300,14 +300,19 @@ export async function initializeChatFlow({
     scheduleChatKeyRefresh
 }) {
     setCurrentChatId(String(chatId));
-    const res = await authFetch(`/messages/get_keys?chat_id=${chatId}`);
+    const urlParams = new URLSearchParams(window.location.search);
+    const forceSessionReset = urlParams.get("session_reset") === "1";
+    const res = await authFetch(
+        `/messages/get_keys?chat_id=${chatId}${forceSessionReset ? "&force_session_reset=1" : ""}`
+    );
     const data = await res.json();
     logChatState("initial chat keys response", {
         responseStatus: data.status,
         responseHasIdentityKey: Boolean(data.identity_key),
         responseHasIdentitySigningKey: Boolean(data.identity_signing_key),
         responseHasPrekeyBundle: Boolean(data.prekey_bundle),
-        responseDeviceBundleCount: Array.isArray(data.device_bundles) ? data.device_bundles.length : 0
+        responseDeviceBundleCount: Array.isArray(data.device_bundles) ? data.device_bundles.length : 0,
+        forceSessionReset
     });
 
     if (data.status !== "ok") {
@@ -315,6 +320,13 @@ export async function initializeChatFlow({
     }
 
     await applyChatKeys(data.identity_key, data.identity_signing_key, data.prekey_bundle, data.username, data, data.device_bundles || []);
+    if (forceSessionReset) {
+        const cleanParams = new URLSearchParams(window.location.search);
+        cleanParams.delete("session_reset");
+        const nextQuery = cleanParams.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+        window.history.replaceState({}, "", nextUrl);
+    }
     openChatSocket(chatId);
     scheduleChatKeyRefresh(chatId);
 }

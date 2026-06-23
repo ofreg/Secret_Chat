@@ -8,7 +8,7 @@ import {
     getRatchetState,
     saveCachedMessageText,
     saveLastSeenMessageId
-} from "./crypto.js?v=20260612a";
+} from "./crypto.js?v=20260623b";
 import {
     cacheAttachmentHistoryFromMessageMeta,
     decryptMessage,
@@ -313,7 +313,9 @@ export function createHistoryController({
                 isOwnMessage,
                 attachment: resolvedAttachment,
                 deletedForAll: Boolean(data.deleted_for_all),
-                replyTo: await buildReplyPayload(data.reply_to_message_id)
+                replyTo: await buildReplyPayload(data.reply_to_message_id),
+                createdAt: data.created_at || new Date().toISOString(),
+                readAt: data.read_at || null
             });
             renderedMessageIds.add(messageId);
             return;
@@ -377,7 +379,9 @@ export function createHistoryController({
                 isOwnMessage,
                 attachment,
                 deletedForAll: Boolean(data.deleted_for_all),
-                replyTo: await buildReplyPayload(data.reply_to_message_id)
+                replyTo: await buildReplyPayload(data.reply_to_message_id),
+                createdAt: data.created_at || new Date().toISOString(),
+                readAt: data.read_at || null
             });
         } catch (err) {
             console.warn("Decrypt error:", err);
@@ -396,7 +400,9 @@ export function createHistoryController({
                 isOwnMessage,
                 attachment: data.attachment || null,
                 deletedForAll: Boolean(data.deleted_for_all),
-                replyTo: await buildReplyPayload(data.reply_to_message_id)
+                replyTo: await buildReplyPayload(data.reply_to_message_id),
+                createdAt: data.created_at || new Date().toISOString(),
+                readAt: data.read_at || null
             });
         }
     }

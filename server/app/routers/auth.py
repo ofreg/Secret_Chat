@@ -605,6 +605,15 @@ def update_profile(
         db.rollback()
         audit_logger.warning("profile_update_invalid_avatar user_id=%s", current_user.id)
         return render_profile_page(request, user or current_user, error=str(exc), name_override=name)
+    except OSError as exc:
+        db.rollback()
+        audit_logger.exception("profile_update_storage_failed user_id=%s", current_user.id)
+        return render_profile_page(
+            request,
+            user or current_user,
+            error="Не вдалося зберегти файл аватарки на сервері.",
+            name_override=name,
+        )
     finally:
         db.close()
 

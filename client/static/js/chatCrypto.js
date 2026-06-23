@@ -6,7 +6,7 @@ import {
     getIdentitySigningPrivateKeyUint8,
     saveAttachmentHistory,
     saveGroupSenderState
-} from "./crypto.js?v=20260612b";
+} from "./crypto.js?v=20260623b";
 import { decryptRatchetMessage, encryptRatchetMessage } from "./doubleRatchet.js?v=20260420i";
 import { deriveLabeledSecrets } from "./hkdf.js?v=20260420i";
 

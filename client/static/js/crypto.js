@@ -205,6 +205,38 @@ export async function deleteRatchetState(chatId) {
     scheduleCloudBackupSync();
 }
 
+export async function clearLocalChatState(chatId) {
+    const normalizedChatId = String(chatId || "").trim();
+    if (!normalizedChatId) {
+        return;
+    }
+
+    const db = await idbOpen();
+    const ratchetPrefix = `${normalizedChatId}:from:`;
+    const peerRatchetPrefix = `${normalizedChatId}:peer:`;
+
+    await cleanupStoreEntries(db, "ratchets", (key) => {
+        const stringKey = String(key);
+        return stringKey === normalizedChatId
+            || stringKey.startsWith(ratchetPrefix)
+            || stringKey.startsWith(peerRatchetPrefix);
+    });
+
+    await cleanupStoreEntries(db, "messages", (key) => {
+        const stringKey = String(key);
+        return stringKey === `meta:lastSeen:${normalizedChatId}`
+            || stringKey.startsWith(`msg:${normalizedChatId}:`)
+            || stringKey.startsWith(`deleted:${normalizedChatId}:`);
+    });
+
+    await cleanupStoreEntries(db, "keys", (key) => {
+        const stringKey = String(key);
+        return stringKey.startsWith(`group_sender_state:${normalizedChatId}:`);
+    });
+
+    scheduleCloudBackupSync();
+}
+
 export async function saveCachedMessageText(chatId, messageId, text) {
     const db = await idbOpen();
     await db.put("messages", {

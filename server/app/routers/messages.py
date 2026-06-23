@@ -199,6 +199,8 @@ def serialize_message(message: Message, sender_name: str, *, historical: bool) -
         "sender_device_id": message.sender_device_id,
         "content": message.content,
         "historical": historical,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "read_at": message.read_at.isoformat() if message.read_at else None,
         "delivery_status": get_delivery_status(message),
         "attachment": attachment_payload,
         "deleted_for_all": False,
@@ -215,6 +217,7 @@ def build_message_status_event(message: Message) -> dict:
     return {
         "type": "message_status",
         "message_id": message.id,
+        "read_at": message.read_at.isoformat() if message.read_at else None,
         "delivery_status": get_delivery_status(message),
     }
 
@@ -657,6 +660,13 @@ async def upload_message_attachment(
             attachment = save_message_attachment(file, encrypted=encrypted)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            audit_logger.exception(
+                "message_attachment_storage_failed chat_id=%s user_id=%s",
+                chat_id,
+                current_user.id,
+            )
+            raise HTTPException(status_code=500, detail="Could not save attachment on server.") from exc
 
         audit_logger.info(
             "message_attachment_uploaded chat_id=%s user_id=%s kind=%s size=%s",
@@ -689,6 +699,7 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
         result = await db.execute(select(Chat).where(and_(Chat.user1_id == u1, Chat.user2_id == u2)))
         chat = result.scalar_one_or_none()
         is_new_chat = chat is None
+        session_reset = False
 
         if not chat:
             chat = Chat(user1_id=u1, user2_id=u2, is_group=False, creator_id=current_user.id)
@@ -704,25 +715,36 @@ async def start_chat_json(username: str = Form(...), current_user: User = Depend
         else:
             await ensure_direct_chat_participants_async(chat, db)
             current_participant = await get_chat_participant_async(chat.id, current_user.id, db)
+            other_participant = await get_chat_participant_async(chat.id, other_user.id, db)
+            session_reset = bool(
+                (current_participant and current_participant.hidden)
+                or (other_participant and other_participant.hidden)
+            )
             set_chat_hidden_for_user(chat, current_user.id, False, current_participant)
             await db.commit()
             audit_logger.info(
-                "chat_reused chat_id=%s requester_id=%s other_user_id=%s",
+                "chat_reused chat_id=%s requester_id=%s other_user_id=%s session_reset=%s",
                 chat.id,
                 current_user.id,
                 other_user.id,
+                session_reset,
             )
 
         return {
             "status": "ok",
             "chat_id": chat.id,
+            "session_reset": session_reset,
             "identity_key": other_user.identity_key or "",
             "identity_signing_key": other_user.identity_signing_key or "",
             "prekey_bundle": await (
-                issue_prekey_bundle(other_user.id, db) if is_new_chat else peek_prekey_bundle(other_user.id, db)
+                issue_prekey_bundle(other_user.id, db) if (is_new_chat or session_reset) else peek_prekey_bundle(other_user.id, db)
             ),
             "device_bundles": [
-                await (issue_device_prekey_bundle(device, db) if is_new_chat else peek_device_prekey_bundle(device, db))
+                await (
+                    issue_device_prekey_bundle(device, db)
+                    if (is_new_chat or session_reset)
+                    else peek_device_prekey_bundle(device, db)
+                )
                 for device in active_devices
             ],
             "username": other_user.username,
@@ -746,8 +768,8 @@ async def start_group_chat_json(
         if username not in unique_usernames and username != current_user.username:
             unique_usernames.append(username)
 
-    if len(unique_usernames) < 2:
-        return {"status": "error", "message": "Select at least two other users for a group."}
+    if len(unique_usernames) < 1:
+        return {"status": "error", "message": "Select at least one other user for a group."}
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(User).where(User.username.in_(unique_usernames)))
@@ -1556,14 +1578,23 @@ def is_message_visible_to_user(
 
 
 @router.get("/messages/get_keys")
-async def get_keys(chat_id: int, current_user: User = Depends(get_current_user)):
+async def get_keys(
+    chat_id: int,
+    force_session_reset: bool = False,
+    current_user: User = Depends(get_current_user),
+):
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Chat).where(Chat.id == chat_id))
         chat = result.scalar_one_or_none()
         if not chat:
             return {"status": "error", "message": "Chat not found or access denied."}
 
-        payload = await build_chat_keys_payload(chat, current_user, db, issue_prekeys=False)
+        payload = await build_chat_keys_payload(
+            chat,
+            current_user,
+            db,
+            issue_prekeys=bool(force_session_reset),
+        )
         if payload.get("status") != "ok":
             return payload
         if chat.is_group:
