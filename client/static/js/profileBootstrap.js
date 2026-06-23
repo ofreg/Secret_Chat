@@ -37,9 +37,16 @@ function setDevicesStatus(message, isError = false) {
 
 function renderDevicesList(devices, currentDeviceId) {
     const listEl = document.getElementById("devicesPanelList");
+    const introEl = document.getElementById("devicesPanelIntro");
     if (!listEl) {
         return;
     }
+
+    if (introEl) {
+        introEl.textContent = "Тут відображаються браузери, прив'язані до вашого акаунта.";
+    }
+
+    listEl.className = "profile-facts devices-panel-list";
 
     if (!Array.isArray(devices) || devices.length === 0) {
         listEl.innerHTML = "<p class=\"card-copy\">Ще немає зареєстрованих браузерів.</p>";
@@ -50,19 +57,33 @@ function renderDevicesList(devices, currentDeviceId) {
         const isCurrent = device.device_id === currentDeviceId;
         const statusLabel = device.has_complete_bundle ? "E2EE готовий" : "Ключі ще не ініціалізовані";
         const actionButton = isCurrent
-            ? "<button type=\"button\" class=\"danger-btn\" disabled>Поточний браузер</button>"
-            : `<button type="button" class="danger-btn" data-device-revoke="${device.device_id}">Відкликати</button>`;
+            ? "<button type=\"button\" class=\"danger-btn device-card-badge\" disabled>Поточний браузер</button>"
+            : `<button type="button" class="danger-btn device-card-badge" data-device-revoke="${device.device_id}">Відкликати</button>`;
 
         return `
-            <div class="fact-row" data-device-card="${device.device_id}" style="align-items:flex-start; gap:16px;">
-                <div style="flex:1;">
-                    <div class="fact-label">${escapeHtml(device.device_name || "Browser device")}${isCurrent ? " (поточний)" : ""}</div>
-                    <div class="fact-value" style="display:block; margin-top:4px;">ID: ${escapeHtml(device.device_id)}</div>
-                    <div class="fact-value" style="display:block; margin-top:4px;">Створено: ${escapeHtml(formatDeviceTimestamp(device.created_at))}</div>
-                    <div class="fact-value" style="display:block; margin-top:4px;">Остання активність: ${escapeHtml(formatDeviceTimestamp(device.last_seen_at))}</div>
-                    <div class="fact-value" style="display:block; margin-top:4px;">Стан: ${escapeHtml(statusLabel)}</div>
+            <div class="device-card" data-device-card="${device.device_id}">
+                <div class="device-card-header">
+                    <h3 class="device-card-title">${escapeHtml(device.device_name || "Browser device")}${isCurrent ? " (поточний)" : ""}</h3>
+                    <div>${actionButton}</div>
                 </div>
-                <div>${actionButton}</div>
+                <div class="device-card-meta">
+                    <div class="device-card-meta-item">
+                        <span class="device-card-meta-label">ID</span>
+                        <span class="device-card-meta-value">${escapeHtml(device.device_id)}</span>
+                    </div>
+                    <div class="device-card-meta-item">
+                        <span class="device-card-meta-label">Створено</span>
+                        <span class="device-card-meta-value">${escapeHtml(formatDeviceTimestamp(device.created_at))}</span>
+                    </div>
+                    <div class="device-card-meta-item">
+                        <span class="device-card-meta-label">Остання активність</span>
+                        <span class="device-card-meta-value">${escapeHtml(formatDeviceTimestamp(device.last_seen_at))}</span>
+                    </div>
+                    <div class="device-card-meta-item">
+                        <span class="device-card-meta-label">Готовність E2EE</span>
+                        <span class="device-card-meta-value">${escapeHtml(statusLabel)}</span>
+                    </div>
+                </div>
             </div>
         `;
     }).join("");

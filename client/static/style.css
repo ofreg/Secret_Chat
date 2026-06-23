@@ -353,6 +353,80 @@ textarea {
     gap: 22px;
 }
 
+.profile-grid-devices {
+    grid-template-columns: 1fr;
+}
+
+.devices-panel-card {
+    width: 100%;
+}
+
+.devices-panel-list {
+    display: grid;
+    gap: 14px;
+}
+
+.device-card {
+    display: grid;
+    gap: 14px;
+    width: 100%;
+    padding: 18px 20px;
+    border-radius: 18px;
+    background: #f4f8fd;
+    border: 1px solid rgba(195, 213, 231, 0.9);
+}
+
+.device-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.device-card-title {
+    margin: 0;
+    color: #21466f;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.device-card-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 170px;
+}
+
+.device-card-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.device-card-meta-item {
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: #ffffff;
+    border: 1px solid rgba(195, 213, 231, 0.85);
+}
+
+.device-card-meta-label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.device-card-meta-value {
+    display: block;
+    color: var(--text);
+    font-weight: 800;
+    word-break: break-word;
+}
+
 .profile-facts {
     display: grid;
     gap: 12px;

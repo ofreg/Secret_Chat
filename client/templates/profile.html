@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-shell">
     <section class="profile-card">
-        <div class="profile-grid">
+        <div class="profile-grid profile-grid-devices">
             <div>
                 <h2 class="card-title">Профіль</h2>
                 <p class="card-copy">Оновіть своє ім'я та фото. Якщо фото немає, у чатах буде показаний градієнтний аватар.</p>
@@ -39,7 +39,7 @@
                 </form>
             </div>
 
-            <aside class="panel-card">
+            <aside class="panel-card devices-panel-card">
                 <div class="profile-avatar-preview">
                     {% if avatar_url %}
                     <img class="profile-avatar-image" src="{{ avatar_url }}" alt="{{ name }}">
@@ -71,17 +71,16 @@
     </section>
 
     <section class="profile-card">
-        <div class="profile-grid">
+        <div class="profile-grid profile-grid-devices">
             <div>
                 <h2 class="card-title">Пристрої</h2>
-                <p class="card-copy">
-                    Тут відображаються браузери, прив'язані до вашого акаунта. Для поточної Signal-style
-                    multi-device моделі кожен браузер працює як окремий E2EE-пристрій.
+                <p class="card-copy" id="devicesPanelIntro">
+                    Тут відображаються браузери, прив'язані до вашого акаунта.
                 </p>
                 <p class="card-copy" id="devicesPanelStatus">Завантаження списку пристроїв...</p>
             </div>
 
-            <aside class="panel-card">
+            <aside class="panel-card devices-panel-card">
                 <div class="profile-facts" id="devicesPanelList"></div>
             </aside>
         </div>
@@ -116,6 +115,6 @@
 
 {% block scripts %}
 {% if init_keys %}
-<script type="module" src="/static/js/profileBootstrap.js?v=20260602b"></script>
+<script type="module" src="/static/js/profileBootstrap.js?v=20260623d"></script>
 {% endif %}
 {% endblock %}

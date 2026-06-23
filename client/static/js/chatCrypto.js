@@ -357,9 +357,6 @@ async function resolveAttachmentHistorySecret({
     resolveSenderSigningKeyByDeviceId = null
 }) {
     const currentDeviceId = readCurrentDeviceId();
-    const wrappedKeyPayload = isOwnMessage
-        ? (attachment.meta.sender_device_keys?.[currentDeviceId] || attachment.meta.sender_key)
-        : (attachment.meta.recipient_device_keys?.[currentDeviceId] || attachment.meta.recipient_key);
     const cachedHistory = await getAttachmentHistory(attachment.url);
 
     if (
@@ -371,22 +368,40 @@ async function resolveAttachmentHistorySecret({
     }
 
     let parsedKeyPayload = null;
-    if (wrappedKeyPayload) {
-        const decryptedKeyPayload = isGroupSenderWrappedPayload(wrappedKeyPayload)
-            ? await decryptGroupSenderMessage({
-                chatId: attachment.meta.chat_id || attachment.chat_id || "",
-                payload: wrappedKeyPayload,
-                myPrivateKeyUint8,
-                signerIdentitySigningKeyBase64: resolveAttachmentSignerKey({
-                    attachment,
-                    isOwnMessage,
-                    myIdentitySigningKeyBase64,
-                    resolveOwnSigningKeyByDeviceId,
-                    resolveSenderSigningKeyByDeviceId
-                })
-            })
-            : decryptLegacyPayload(wrappedKeyPayload, myPrivateKeyUint8);
-        parsedKeyPayload = JSON.parse(decryptedKeyPayload);
+    const candidateWrappedPayloads = buildAttachmentKeyCandidates({
+        attachment,
+        isOwnMessage,
+        currentDeviceId
+    });
+
+    if (candidateWrappedPayloads.length) {
+        let lastDecryptError = null;
+        for (const candidatePayload of candidateWrappedPayloads) {
+            try {
+                const decryptedKeyPayload = isGroupSenderWrappedPayload(candidatePayload)
+                    ? await decryptGroupSenderMessage({
+                        chatId: attachment.meta.chat_id || attachment.chat_id || "",
+                        payload: candidatePayload,
+                        myPrivateKeyUint8,
+                        signerIdentitySigningKeyBase64: resolveAttachmentSignerKey({
+                            attachment,
+                            isOwnMessage,
+                            myIdentitySigningKeyBase64,
+                            resolveOwnSigningKeyByDeviceId,
+                            resolveSenderSigningKeyByDeviceId
+                        })
+                    })
+                    : decryptLegacyPayload(candidatePayload, myPrivateKeyUint8);
+                parsedKeyPayload = JSON.parse(decryptedKeyPayload);
+                break;
+            } catch (candidateError) {
+                lastDecryptError = candidateError;
+            }
+        }
+
+        if (!parsedKeyPayload && lastDecryptError) {
+            throw lastDecryptError;
+        }
     } else if (cachedHistory?.key) {
         parsedKeyPayload = { key: cachedHistory.key };
     } else {
@@ -417,6 +432,41 @@ async function resolveAttachmentHistorySecret({
         metadata: parsedMetadata,
         cryptoKey
     };
+}
+
+function buildAttachmentKeyCandidates({ attachment, isOwnMessage, currentDeviceId }) {
+    const sideDeviceKeys = isOwnMessage
+        ? attachment?.meta?.sender_device_keys
+        : attachment?.meta?.recipient_device_keys;
+    const sideRootKey = isOwnMessage
+        ? attachment?.meta?.sender_key
+        : attachment?.meta?.recipient_key;
+
+    const candidates = [];
+    const seen = new Set();
+
+    const pushCandidate = (payload) => {
+        if (!payload) {
+            return;
+        }
+        const serialized = typeof payload === "string" ? payload : JSON.stringify(payload);
+        if (seen.has(serialized)) {
+            return;
+        }
+        seen.add(serialized);
+        candidates.push(payload);
+    };
+
+    if (currentDeviceId && sideDeviceKeys?.[currentDeviceId]) {
+        pushCandidate(sideDeviceKeys[currentDeviceId]);
+    }
+
+    for (const payload of Object.values(sideDeviceKeys || {})) {
+        pushCandidate(payload);
+    }
+
+    pushCandidate(sideRootKey);
+    return candidates;
 }
 
 async function decryptAttachmentMetadata({ attachment, cryptoKey }) {

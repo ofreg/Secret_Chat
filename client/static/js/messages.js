@@ -25,7 +25,7 @@ import {
     encryptGroupMessage,
     encryptMessage,
     encryptMessageForDevices
-} from "./chatCrypto.js?v=20260623a";
+} from "./chatCrypto.js?v=20260623b";
 import {
     bindMediaViewerControls,
     bindAttachmentAlertControls,
